@@ -93,6 +93,21 @@ dotnet restore
 dotnet build -c Release
 ```
 
+## Download a release
+
+Windows releases are published as a self-contained `win-x64` ZIP. Extract the
+complete ZIP and run `Cotabby.exe`. Keep the `runtimes\win-x64` folder beside
+the executable: LLamaSharp loads its native CPU/Vulkan libraries from that
+folder. The release intentionally uses a folder publish instead of a
+single-file executable for reliable native-library loading.
+
+To create the same package locally:
+
+```powershell
+dotnet publish src\Cotabby.App\Cotabby.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o artifacts\Cotabby-win-x64
+Compress-Archive -Path artifacts\Cotabby-win-x64\* -DestinationPath artifacts\Cotabby-win-x64.zip
+```
+
 ## Run
 
 ```powershell
