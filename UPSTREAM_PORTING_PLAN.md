@@ -26,6 +26,20 @@ Bring high-value, compatible improvements from the original Cotabby project into
 5. Port settings and UI ideas as WPF equivalents when they provide clear value.
 6. Skip Apple-only features unless a Windows equivalent is explicitly designed.
 
+## Feature status
+
+| Feature | Upstream source | Windows status |
+| --- | --- | --- |
+| Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Implemented on `codex/upstream-output-budget`; local .NET 9 tests/build/publish passed; Windows CI and owner live proof tracked in the PR |
+
+See [the implementation and acceptance note](docs/upstream-output-budget.md).
+The adaptation counts actual loaded-model tokens rather than porting the Swift
+estimator; FIM uses the loaded context too. No new UI/settings, model catalog,
+telemetry, cloud inference, or native decoding algorithm changes are included.
+Do not mark full runtime parity until the owner runs the extracted Windows test
+ZIP with a small model and a relevant larger model and verifies real suggestions.
+The owner approved branch/PR/CI ZIP delivery only, not merge or release.
+
 ## Explicit non-goals
 
 - Do not merge `FuJacob/cotabby` wholesale.

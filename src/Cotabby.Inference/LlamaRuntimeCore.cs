@@ -59,6 +59,9 @@ public sealed class LlamaRuntimeCore : IDisposable
 
     public SafeLlamaModelHandle.Vocabulary Vocab => _weights.Vocab;
 
+    /// <summary>The actual context allocated by llama.cpp, not a catalog assumption.</summary>
+    public int ContextSizeTokens => checked((int)_context.NativeHandle.ContextSize);
+
     /// <summary>True if the loaded model exposes all three FIM markers.</summary>
     public bool SupportsFillInMiddle =>
         Vocab.InfillPrefix.HasValue && Vocab.InfillSuffix.HasValue && Vocab.InfillMiddle.HasValue;
