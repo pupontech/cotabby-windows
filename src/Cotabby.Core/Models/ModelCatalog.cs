@@ -42,6 +42,16 @@ public static class ModelCatalog
 
     public static IReadOnlyList<CotabbyModel> All { get; } =
     [
+        new CotabbyModel
+        {
+            Id = "tabby-2-plus",
+            DisplayName = "tabby-2-plus",
+            Subtitle = "Qwen3.5 4B Base · 2.7 GB — best general default",
+            DownloadUrl = HfUrl("mradermacher/Qwen3.5-4B-Base-i1-GGUF", "Qwen3.5-4B-Base.i1-Q4_K_M.gguf"),
+            ApproxSizeBytes = 2_708_804_864,
+            ContextLength = 4096,
+            SupportsFillInMiddle = true,
+        },
         // The same four *base* checkpoints upstream Cotabby ships
         // (RuntimeModelCatalog.downloadableModels): base models continue text
         // instead of answering it, which is the entire premise of the
@@ -68,6 +78,16 @@ public static class ModelCatalog
             Subtitle = "Qwen3.5 0.8B Base · 0.6 GB — fastest, low-memory",
             DownloadUrl = HfUrl("mradermacher/Qwen3.5-0.8B-Base-i1-GGUF", "Qwen3.5-0.8B-Base.i1-Q6_K.gguf"),
             ApproxSizeBytes = 629_744_512,
+            ContextLength = 4096,
+            SupportsFillInMiddle = true,
+        },
+        new CotabbyModel
+        {
+            Id = "tabby-2-code",
+            DisplayName = "tabby-2-code",
+            Subtitle = "Qwen3.5 9B Coder · 5.5 GB — best for programming",
+            DownloadUrl = HfUrl("mradermacher/Qwen3.5-9B-Coder-i1-GGUF", "Qwen3.5-9B-Coder.i1-Q4_K_S.gguf"),
+            ApproxSizeBytes = 5_488_556_224,
             ContextLength = 4096,
             SupportsFillInMiddle = true,
         },

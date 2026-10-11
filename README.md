@@ -17,8 +17,8 @@ suggestions on `Tab`. This port replaces that stack with WPF, UI Automation (UIA
 - **Word-by-word acceptance** — press `Tab` to take the next word (or whole phrase, in
   phrase mode) and keep pressing to take more, exactly like the macOS app; press
   `` ` `` (backtick) to take the entire suggestion at once.
-- **The same models as upstream** — the four `tabby-2-*` *base* checkpoints
-  (Qwen3.5 0.8B/2B Base, Gemma 4 E2B/E4B from mradermacher). Base models continue
+- **Local completion models** — general-purpose base models plus a code-focused
+  Qwen3.5 Coder option. Base models continue
   your text instead of chatting at it, which is what makes the suggestions read
   like *your* next words.
 - **The upstream prompt pipeline** — persona ("Written by <you>."), language
@@ -45,13 +45,16 @@ suggestions on `Tab`. This port replaces that stack with WPF, UI Automation (UIA
 
 | Model          | File                             | Size    | Notes                        |
 | -------------- | -------------------------------- | ------- | ---------------------------- |
+| `tabby-2-plus` | `Qwen3.5-4B-Base.i1-Q4_K_M.gguf` | ~2.7 GB | best general default         |
 | `tabby-2-nano` | `Qwen3.5-0.8B-Base.i1-Q6_K.gguf` | ~0.6 GB | fastest, low-memory          |
 | `tabby-2-mini` | `Qwen3.5-2B-Base.i1-Q4_K_M.gguf` | ~1.3 GB | recommended default          |
+| `tabby-2-code` | `Qwen3.5-9B-Coder.i1-Q4_K_S.gguf` | ~5.5 GB | best for programming         |
 | `tabby-2-base` | `gemma-4-E2B.i1-Q6_K.gguf`       | ~3.9 GB | higher quality               |
 | `tabby-2-pro`  | `gemma-4-E4B.i1-Q4_K_M.gguf`     | ~5.3 GB | best quality, needs 16 GB+   |
 
-Same Hugging Face artifacts as the macOS app, so the two ports can share a cache.
-Qwen3.5 models also support fill-in-middle (used when the caret is mid-line).
+The Qwen3.5 models support fill-in-middle (used when the caret is mid-line).
+The code model is optimized for programming; use `tabby-2-plus` for general
+writing and mixed use.
 
 ## Stack
 
@@ -135,7 +138,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 
 | Area                              | Windows port              |
 |-----------------------------------|---------------------------|
-| Base-model catalog (`tabby-2-nano/mini/base/pro`) | ✅ same artifacts |
+| Base-model catalog and current Qwen additions | ✅ |
 | Base-completion prompt pipeline (persona / language / budgeted sections) | ✅ |
 | Constrained greedy decode (top-20 argmax, no-repeat-3-gram, sentence stops) | ✅ |
 | One-shot output normalizer (echo strip, dup filter, safety gate) | ✅ |
