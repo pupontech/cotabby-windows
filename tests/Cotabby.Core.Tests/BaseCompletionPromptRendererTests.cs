@@ -6,6 +6,14 @@ namespace Cotabby.Core.Tests;
 
 public class BaseCompletionPromptRendererTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ExhaustedCharacterBudget_DoesNotRestoreRawPrefix(int budget)
+    {
+        Assert.Empty(BaseCompletionPromptRenderer.Prompt("nearest caret", userName: "Troy", contextBudget: budget));
+    }
+
     [Fact]
     public void BarePrefix_NoPreface()
     {

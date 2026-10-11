@@ -57,21 +57,23 @@ public sealed class LlamaSuggestionEngine : ISuggestionEngine
         // Everything else goes through the base continuation prompt.
         bool useFim = core.SupportsFillInMiddle && HasMeaningfulSuffix(request.Suffix);
 
+        int maxPromptTokens = CompletionPromptBudget.ForContext(core.ContextSizeTokens, request.MaxTokens);
+        if (maxPromptTokens < 3)
+        {
+            yield return new SuggestionChunk(string.Empty, IsFinal: true);
+            yield break;
+        }
         string prompt;
         LLama.Native.LLamaToken[] promptTokens;
         if (useFim)
         {
             prompt = request.Prefix; // for normalization echo checks
-            int maxPromptTokens = Math.Max(1, 4096 - request.MaxTokens);
             promptTokens = core.BuildFimTokens(request.Prefix, request.Suffix, maxPromptTokens);
         }
         else
         {
-            var windowedPrefix = BaseCompletionPromptRenderer.WindowPrefix(request.Prefix);
-            prompt = BaseCompletionPromptRenderer.Prompt(
-                windowedPrefix,
-                userName: request.UserName,
-                languageInstruction: request.LanguageInstruction);
+            prompt = CompletionPromptBuilder.Build(request, core.ContextSizeTokens,
+                text => core.TokenizeText(text, addBos: core.Vocab.ShouldAddBOS).Length);
             if (prompt.Length == 0)
             {
                 yield return new SuggestionChunk(string.Empty, IsFinal: true);

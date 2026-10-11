@@ -26,8 +26,12 @@ public static class BaseCompletionPromptRenderer
         IReadOnlyList<string>? customRules = null,
         string? languageInstruction = null,
         string? extendedContext = null,
-        int contextBudget = DefaultContextBudget)
+        int contextBudget = DefaultContextBudget,
+        int? tokenBudget = null,
+        Func<string, int>? tokenCounter = null)
     {
+        if (tokenBudget.HasValue) ArgumentNullException.ThrowIfNull(tokenCounter);
+        if (contextBudget <= 0 || tokenBudget is <= 0) return string.Empty;
         var trimmedPrefix = TrimTrailingWhitespace(prefixText);
 
         var sections = new List<PromptSection>();
@@ -59,19 +63,77 @@ public static class BaseCompletionPromptRenderer
             MaxChars: Math.Max(1, trimmedPrefix.Length),
             SectionTruncation.PreserveEnd));
 
-        var kept = PromptSectionBudget.Allocate(sections, contextBudget);
-        var prefix = kept.FirstOrDefault(s => s.Name == "prefix")?.Content ?? trimmedPrefix;
-        var preface = kept.Where(s => s.Name != "prefix").Select(s => s.Content).ToList();
-
-        if (preface.Count == 0)
+        var kept = PromptSectionBudget.Allocate(sections, contextBudget)
+            .Select(s => s with { Content = TrimSurrogateEdges(s.Content) }).ToList();
+        if (tokenBudget is { } budget)
         {
-            // No context to condition on: hand the model the bare text.
-            return prefix;
+            FitTokenBudget(kept, budget, tokenCounter!);
         }
-        // A blank line separates the conditioning preface from the live text
-        // without a label the model could copy. The prefix remains the final
-        // bytes of the prompt.
-        return string.Join("\n", preface) + "\n\n" + prefix;
+        return Render(kept);
+    }
+
+    private static string Render(IReadOnlyList<PromptSection> sections)
+    {
+        var prefix = sections.FirstOrDefault(s => s.Name == "prefix")?.Content ?? string.Empty;
+        if (prefix.Length == 0) return string.Empty;
+        var preface = sections.Where(s => s.Name != "prefix" && s.Content.Length > 0)
+            .Select(s => s.Content).ToList();
+        return preface.Count == 0 ? prefix : string.Join("\n", preface) + "\n\n" + prefix;
+    }
+
+    private static void FitTokenBudget(List<PromptSection> sections, int budget, Func<string, int> tokenCounter)
+    {
+        int Count()
+        {
+            int count = tokenCounter(Render(sections));
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+            return count;
+        }
+
+        if (Count() <= budget) return;
+        // Remove lower-priority conditioning before touching the caret. Measure
+        // the entire serialized prompt, including separators and tokenizer BOS.
+        var trimOrder = sections.Select((s, i) => (Section: s, Index: i))
+            .OrderBy(t => t.Section.Priority).ThenByDescending(t => t.Index).ToList();
+        foreach (var (section, index) in trimOrder)
+        {
+            sections[index] = section with { Content = string.Empty };
+            if (Count() > budget) continue;
+
+            int low = 0;
+            int high = section.Content.Length;
+            string best = string.Empty;
+            while (low <= high)
+            {
+                int length = low + (high - low) / 2;
+                var content = section.Truncation == SectionTruncation.PreserveEnd
+                    ? section.Content[^length..] : section.Content[..length];
+                content = TrimSurrogateEdges(content);
+                sections[index] = section with { Content = content.Trim() };
+                if (Count() <= budget)
+                {
+                    best = sections[index].Content;
+                    low = length + 1;
+                }
+                else
+                {
+                    high = length - 1;
+                }
+            }
+            // Token counts can be non-monotonic; use only a measured fit. The
+            // search may underfill, but must never hand an oversized prompt on.
+            sections[index] = section with { Content = best };
+            return;
+        }
+        sections.Clear();
+    }
+
+    private static string TrimSurrogateEdges(string text)
+    {
+        int start = text.Length > 0 && char.IsLowSurrogate(text[0]) ? 1 : 0;
+        int end = text.Length;
+        if (end > start && char.IsHighSurrogate(text[end - 1])) end--;
+        return text[start..end];
     }
 
     private static PromptSection ContextSection(string name, string content, int priority, int maxChars) =>
