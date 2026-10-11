@@ -79,6 +79,14 @@ src/
   Cotabby.App/         WPF host: tray icon, settings, overlay window, DI composition.
 ```
 
+## Porting more upstream features
+
+The Windows port is intentionally maintained separately from the original
+macOS repository. To continue bringing over useful improvements safely, follow
+the [upstream feature-porting plan](UPSTREAM_PORTING_PLAN.md). It includes the
+project baseline, feature priorities, verification commands, and a complete
+copy-paste prompt for the next AI coding agent.
+
 `Cotabby.Core` and `Cotabby.Inference` target plain `net9.0` so the testable logic
 stays decoupled from the Windows desktop runtime. `Cotabby.Win32` and `Cotabby.App`
 target `net9.0-windows`.
