@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Threading;
 using Cotabby.App.Overlay;
@@ -31,6 +32,13 @@ public sealed class AppHost : IAsyncDisposable
     public SettingsStore SettingsStore { get; }
     public AppSettings Settings { get; }
     public GhostOverlayWindow Overlay { get; }
+
+    /// <summary>
+    /// Opt-in latency log behind the Performance pane. Path mirrors the other
+    /// user-visible files under %APPDATA%\Cotabby. Tracking stays off until the
+    /// user enables it in the pane (upstream's default).
+    /// </summary>
+    public PerformanceMetricsStore PerformanceMetrics { get; }
 
     /// <summary>
     /// Optional emoji picker controller — registered from <c>App.OnStartup</c>
@@ -75,6 +83,7 @@ public sealed class AppHost : IAsyncDisposable
 
         sc.AddSingleton<SettingsStore>();
         sc.AddSingleton(provider => provider.GetRequiredService<SettingsStore>().Load());
+        sc.AddSingleton(_ => new PerformanceMetricsStore(PerformanceLogPath()));
 
         sc.AddSingleton<IFocusTracker, UiaFocusTracker>();
         sc.AddSingleton<IKeyboardHook, KeyboardHook>();
@@ -102,8 +111,18 @@ public sealed class AppHost : IAsyncDisposable
         Settings = Services.GetRequiredService<AppSettings>();
         Overlay = overlay;
 
+        PerformanceMetrics = Services.GetRequiredService<PerformanceMetricsStore>();
+        PerformanceMetrics.TrackingEnabled = Settings.EnablePerformanceTracking;
+        Coordinator.PerformanceMetrics = PerformanceMetrics;
+
         ApplyRuntimeSettings();
     }
+
+    private static string PerformanceLogPath() =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Cotabby",
+            "performance.json");
 
     /// <summary>
     /// Push the user-visible settings into the long-lived runtime (coordinator,
@@ -114,6 +133,7 @@ public sealed class AppHost : IAsyncDisposable
     public void ApplyRuntimeSettings()
     {
         Coordinator.Enabled = Settings.Enabled;
+        Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";
 
         var (single, multi) = CompletionLengthPreset.Tokens(Settings.CompletionLengthPreset);
         Coordinator.MaxTokensSingleLine = single;
@@ -158,6 +178,7 @@ public sealed class AppHost : IAsyncDisposable
         if (!ModelDownloader.IsCached(model)) return false;
         var path = ModelDownloader.LocalPath(model);
         await Runtime.LoadAsync(model, path, ct).ConfigureAwait(false);
+        Coordinator.RuntimeModelId = model.DisplayName;
         return Runtime.IsReady;
     }
 
@@ -174,6 +195,7 @@ public sealed class AppHost : IAsyncDisposable
         }
         var path = ModelDownloader.LocalPath(model);
         await Runtime.LoadAsync(model, path, ct).ConfigureAwait(false);
+        Coordinator.RuntimeModelId = model.DisplayName;
         return Runtime.IsReady;
     }
 

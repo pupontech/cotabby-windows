@@ -4,6 +4,14 @@
 
 ### Added
 
+- Port upstream [GPU usage in the Performance pane (#858)](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343)
+  as a partial Windows Performance pane (no CPU/RAM graphs): live Cotabby GPU share, busiest-engine machine GPU
+  utilization and GPU memory read from the `GPU Engine` / `GPU Adapter Memory`
+  performance counters, plus an opt-in log of per-request latency (timestamp,
+  model, elapsed; newest retained, off by default). Every GPU value is optional,
+  so an unavailable counter set shows "no data" rather than a misleading zero,
+  and sampling runs only while the pane is open.
+
 - `tabby-2-plus`: Qwen3.5 4B Base Q4_K_M for general-purpose autocomplete.
 - `tabby-2-code`: Qwen3.5 9B Coder Q4_K_S for programming-focused autocomplete.
 - Project provenance, change boundaries, and AI-agent handoff documentation.

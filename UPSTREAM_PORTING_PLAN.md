@@ -30,7 +30,8 @@ Bring high-value, compatible improvements from the original Cotabby project into
 
 | Feature | Upstream source | Windows status |
 | --- | --- | --- |
-| Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Implemented on `codex/upstream-output-budget`; local .NET 9 tests/build/publish passed; Windows CI and owner live proof tracked in the PR |
+| Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Merged (`046d7cf`); Windows live-validated by the owner on a test build, tagged release still pending |
+| Performance metrics (GPU readouts + request latency; CPU/RAM graphs not ported) | [#858 / `8cdbea2`](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343) | Implemented on `feat/upstream-performance-metrics`; local tests/build/publish; Windows CI and owner live proof pending |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
@@ -38,7 +39,16 @@ estimator; FIM uses the loaded context too. No new UI/settings, model catalog,
 telemetry, cloud inference, or native decoding algorithm changes are included.
 Do not mark full runtime parity until the owner runs the extracted Windows test
 ZIP with a small model and a relevant larger model and verifies real suggestions.
-The owner approved branch/PR/CI ZIP delivery only, not merge or release.
+The earlier output-budget PR was merged after owner acceptance. For this performance-metrics feature, branch/PR/CI test-ZIP delivery is allowed; merge and release remain gated on new owner acceptance.
+
+See [the implementation and acceptance note](docs/upstream-performance-metrics.md).
+Windows reads the same contract from the Windows "GPU Engine" / "GPU Adapter
+Memory" performance counters instead of macOS IOKit; the portable parsing,
+aggregation and share arithmetic live in `Cotabby.Core/Metrics`, and the
+counter adapter is fully best-effort (an unavailable counter set shows as
+"no data", never an error). Latency tracking is opt-in and off by default,
+matching upstream. Live GPU numbers and per-adapter behaviour remain owner
+gated.
 
 ## Explicit non-goals
 

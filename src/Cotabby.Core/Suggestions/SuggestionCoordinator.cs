@@ -36,11 +36,12 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private SuggestionSession? _session;
     private int _sessionPid;
     private bool _enabled = true;
-    private bool _disposed;
+    private volatile bool _disposed;
     /// <summary>True while a generation is past its debounce and the engine is producing tokens.</summary>
     private bool _generationInFlight;
     /// <summary>Process id of the host that owned focus when the in-flight request fired.</summary>
     private int _inFlightPid;
+    private string? _inFlightRequestId;
     /// <summary>
     /// Volatile flag the hook thread reads to decide whether to synchronously
     /// suppress Tab. A separate primitive from <see cref="_session"/> because
@@ -81,6 +82,20 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _logger = logger;
         _ui = ui;
     }
+
+    /// <summary>Opt-in latency log behind the Performance pane, or null when the
+    /// host does not wire one. Recording is a no-op while its tracking toggle is off.</summary>
+    public PerformanceMetricsStore? PerformanceMetrics { get; set; }
+
+    /// <summary>Display name of the model currently answering, stamped onto each
+    /// recorded entry. Set by the host when a model finishes loading.</summary>
+    public string? RuntimeModelId
+    {
+        get => _runtimeModelId;
+        set => _runtimeModelId = string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+    }
+
+    private string _runtimeModelId = "unknown";
 
     /// <summary>Whether suggestions are globally enabled. Tray toggle binds here.</summary>
     public bool Enabled
@@ -156,6 +171,19 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _inFlightRequestId = null;
+        _generationInFlight = false;
+        _inFlightPid = 0;
+        Volatile.Write(ref _hasVisibleSession, 0);
+        Volatile.Write(ref _displayedTextSnapshot, null);
+        void ClearDisposedPresentation()
+        {
+            _session = null;
+            _sessionPid = 0;
+            _overlay.Hide();
+        }
+        if (SynchronizationContext.Current == _ui) ClearDisposedPresentation();
+        else _ui.Post(_ => ClearDisposedPresentation(), null);
         _hook.KeyEvent -= OnKeyEvent;
         _focus.FocusChanged -= OnFocusChanged;
         _focus.Stop();
@@ -191,6 +219,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 _work.Cancel();
                 _generationInFlight = false;
                 _inFlightPid = 0;
+                _inFlightRequestId = null;
             }
         });
     }
@@ -315,6 +344,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     {
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
         var pid = fieldAtTrigger.ProcessId;
+        var metrics = PerformanceMetrics;
+        var modelId = _runtimeModelId;
 
         // Capture the prefix synchronously at trigger time. The PostAsync +
         // _focus.Refresh() round-trip we used to do inside the work function
@@ -346,6 +377,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
         _generationInFlight = true;
         _inFlightPid = pid;
+        _inFlightRequestId = reqId;
         _ = _work.Submit(async ct =>
         {
             _logger.LogInformation("Firing request {ReqId} (post-debounce).", reqId);
@@ -361,6 +393,10 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 var sw = Stopwatch.StartNew();
                 string accumulated = string.Empty;
                 bool overlayShown = false;
+                bool requestPresented = false;
+                bool generationCompleted = false;
+                bool metricsRecorded = false;
+                long elapsedMilliseconds = 0;
                 var lastPosted = DateTime.MinValue;
                 var minInterval = TimeSpan.FromMilliseconds(50);
 
@@ -375,6 +411,20 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, watchdog.Token);
                 var combinedToken = linked.Token;
+
+                void RecordLatencyIfReady()
+                {
+                    if (metricsRecorded || !generationCompleted || !requestPresented
+                        || combinedToken.IsCancellationRequested
+                        || _inFlightRequestId != reqId
+                        || _session?.RequestId != reqId)
+                    {
+                        return;
+                    }
+
+                    metricsRecorded = true;
+                    metrics?.Record(modelId, elapsedMilliseconds);
+                }
 
             int chunkSeq = 0;
             await foreach (var chunk in _engine.GenerateAsync(request, combinedToken).ConfigureAwait(false))
@@ -415,6 +465,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 Post(() =>
                 {
                     if (ctSnapshot.IsCancellationRequested) return;
+                    if (_inFlightRequestId != reqId) return;
 
                     if (_session is not null && _session.RequestId != reqId)
                     {
@@ -459,6 +510,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         Volatile.Write(ref _displayedTextSnapshot, accumulated);
                         _overlay.Show(accumulated, liveAnchor);
                         overlayShown = true;
+                        requestPresented = true;
                         _logger.LogInformation(
                             "Overlay shown req={ReqId} text=\"{Text}\" hex={Hex} anchor={X},{Y}",
                             reqId, EscapeFull(accumulated), HexDump(accumulated),
@@ -474,19 +526,44 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         Volatile.Write(ref _displayedTextSnapshot, accumulated);
                         if (overlayShown) _overlay.Update(accumulated);
                         else { _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
+                        requestPresented = true;
                         _logger.LogInformation(
                             "Overlay updated req={ReqId} text=\"{Text}\" hex={Hex}",
                             reqId, EscapeFull(accumulated), HexDump(accumulated));
                     }
+
+                    RecordLatencyIfReady();
                 });
             }
 
                 sw.Stop();
-                _logger.LogInformation("Request {ReqId} finished in {Ms} ms.", reqId, sw.ElapsedMilliseconds);
+                elapsedMilliseconds = sw.ElapsedMilliseconds;
+                _logger.LogInformation("Request {ReqId} finished in {Ms} ms.", reqId, elapsedMilliseconds);
+                if (accumulated.Length > 0 && !ct.IsCancellationRequested
+                    && !combinedToken.IsCancellationRequested)
+                {
+                    Post(() =>
+                    {
+                        if (ct.IsCancellationRequested || combinedToken.IsCancellationRequested
+                            || _inFlightRequestId != reqId)
+                        {
+                            return;
+                        }
+
+                        generationCompleted = true;
+                        RecordLatencyIfReady();
+                    });
+                }
             }
             finally
             {
-                Post(() => _generationInFlight = false);
+                Post(() =>
+                {
+                    if (_inFlightRequestId != reqId) return;
+                    _generationInFlight = false;
+                    _inFlightPid = 0;
+                    _inFlightRequestId = null;
+                });
             }
         });
     }
@@ -606,6 +683,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _sessionPid = 0;
         _generationInFlight = false;
         _inFlightPid = 0;
+        _inFlightRequestId = null;
         Volatile.Write(ref _hasVisibleSession, 0);
         Volatile.Write(ref _displayedTextSnapshot, null);
         _overlay.Hide();
@@ -715,12 +793,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     private void Post(Action action)
     {
+        if (_disposed) return;
         if (SynchronizationContext.Current == _ui) action();
-        else _ui.Post(_ => action(), null);
+        else _ui.Post(_ => { if (!_disposed) action(); }, null);
     }
 
     private Task PostAsync(Action action)
     {
+        if (_disposed) return Task.CompletedTask;
         if (SynchronizationContext.Current == _ui)
         {
             try { action(); return Task.CompletedTask; }
@@ -729,7 +809,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         var tcs = new TaskCompletionSource();
         _ui.Post(_ =>
         {
-            try { action(); tcs.SetResult(); }
+            try { if (!_disposed) action(); tcs.SetResult(); }
             catch (Exception ex) { tcs.SetException(ex); }
         }, null);
         return tcs.Task;

@@ -79,6 +79,14 @@ public sealed class AppSettings
     // ---- Advanced -------------------------------------------------------
     /// <summary>Inline emoji autocomplete (<c>:smile:</c> → 😄). Default on.</summary>
     public bool EmojiPickerEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Opt-in performance log. Mirrors upstream's "Enable Performance
+    /// Tracking": off by default, records the timestamp, model and elapsed time
+    /// of every suggestion request that produced text, and retains only the
+    /// most recent entries.
+    /// </summary>
+    public bool EnablePerformanceTracking { get; set; }
 }
 
 /// <summary>
