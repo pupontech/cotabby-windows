@@ -11,8 +11,11 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using Cotabby.App.Hosting;
+using Cotabby.App.Metrics;
 using Cotabby.App.Settings;
+using Cotabby.Core.Metrics;
 using Cotabby.Core.Models;
+using Cotabby.Core.Presentation;
 using Cotabby.Inference;
 using Microsoft.Win32;
 
@@ -43,7 +46,7 @@ public partial class SettingsWindow : Window
     private FrameworkElement[] _panes = Array.Empty<FrameworkElement>();
     private static readonly string[] PaneTitles =
     {
-        "General", "Engine & Model", "Writing", "Shortcuts", "Apps", "Advanced", "About",
+        "General", "Engine & Model", "Writing", "Shortcuts", "Apps", "Advanced", "Performance", "About",
     };
 
     private sealed record ChoiceItem(string Id, string Label)
@@ -83,13 +86,23 @@ public partial class SettingsWindow : Window
         _host = host;
         InitializeComponent();
 
+        // Platform-free sampling helper: provider reads happen off the UI thread
+        // behind a single-flight gate and every result is tagged with the
+        // generation it was taken in, so a late reading can be recognised as
+        // stale instead of being written to a readout.
+        _gpuSession = new PerformanceSamplingSession(_gpuTracker.Sample, _gpuTracker.Reset);
+
         _panes = new FrameworkElement[]
         {
-            GeneralPane, EnginePane, WritingPane, ShortcutsPane, AppsPane, AdvancedPane, AboutPane,
+            GeneralPane, EnginePane, WritingPane, ShortcutsPane, AppsPane, AdvancedPane, PerformancePane, AboutPane,
         };
 
         ApplyTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+        // Sampling is bounded to "Performance pane on screen in a visible,
+        // non-minimized window": minimizing, hiding or closing stops it as well.
+        StateChanged += (_, _) => SyncGpuSamplingToVisibility();
+        IsVisibleChanged += (_, _) => SyncGpuSamplingToVisibility();
         // The HWND doesn't exist yet in the constructor, so the title bar tint
         // needs a second pass once the window is realized.
         SourceInitialized += (_, _) => ApplyTitleBarTheme(IsSystemLight());
@@ -100,6 +113,7 @@ public partial class SettingsWindow : Window
         PopulateShortcuts();
         PopulateApps();
         PopulateAdvanced();
+        PopulatePerformance();
         PopulateAbout();
 
         _loaded = true;
@@ -108,6 +122,7 @@ public partial class SettingsWindow : Window
         Closed += (_, _) =>
         {
             _downloadCts?.Cancel();
+            StopGpuSampling();
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             // The name field persists on focus loss; closing the window is the
             // other way focus "leaves" it.
@@ -197,6 +212,10 @@ public partial class SettingsWindow : Window
             _panes[i].Visibility = i == idx ? Visibility.Visible : Visibility.Collapsed;
         }
         Title = $"Settings — {PaneTitles[idx]}";
+
+        // GPU sampling and the request-table refresh run only while this pane is
+        // actually on screen in a visible, non-minimized window.
+        SyncGpuSamplingToVisibility();
     }
 
     // ---------- General ----------
@@ -945,6 +964,189 @@ public partial class SettingsWindow : Window
             });
         }
         catch { /* user can copy the path from the label */ }
+    }
+
+    // ---------- Performance ----------
+
+    private readonly GpuUsageTracker _gpuTracker = new(new WindowsGpuUsageProvider());
+    private readonly PerformanceSamplingSession _gpuSession;
+    private System.Windows.Threading.DispatcherTimer? _gpuTimer;
+    private bool _gpuSampling;
+    private int _gpuEpoch;
+    private PerformanceCounterAvailability _gpuAvailability = PerformanceCounterAvailability.Unknown;
+
+    private void PopulatePerformance()
+    {
+        PerfTrackToggle.IsChecked = _host.Settings.EnablePerformanceTracking;
+        if (_host.PerformanceMetrics is { } metrics) metrics.TrackingEnabled = PerfTrackToggle.IsChecked == true;
+        // No counter-category probe here: enumerating the "GPU Engine" set is a
+        // synchronous registry walk, and this runs on the UI thread during
+        // construction, before the pane is on screen. Availability is learned
+        // from the samples themselves (see ApplyGpuSample), so the hint starts
+        // as unknown and stays hidden until real data says otherwise.
+        _gpuAvailability = PerformanceCounterAvailability.Unknown;
+        ApplyGpuAvailabilityHint();
+        RefreshPerformanceLog();
+        // No GPU sample here either: the pane is not on screen yet, and taking
+        // one now would consume the tracker's baseline outside the sampling
+        // window.
+    }
+
+    private void OnPerfTrackChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        bool enabled = PerfTrackToggle.IsChecked == true;
+        _host.Settings.EnablePerformanceTracking = enabled;
+        if (_host.PerformanceMetrics is { } metrics) metrics.TrackingEnabled = enabled;
+        _host.PersistSettings();
+        RefreshPerformanceLog();
+    }
+
+    private void OnClearPerformanceLog(object sender, RoutedEventArgs e)
+    {
+        _host.PerformanceMetrics?.Clear();
+        RefreshPerformanceLog();
+    }
+
+    private void RefreshPerformanceLog()
+    {
+        var entries = _host.PerformanceMetrics?.Entries ?? Array.Empty<Cotabby.Core.Suggestions.PerformanceEntry>();
+        bool any = entries.Count > 0;
+        PerfEmptyText.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+        PerfClearButton.IsEnabled = any;
+        // Newest first, matching a debugging session's reading order.
+        PerfEntriesPanel.ItemsSource = entries.Reverse().Select(e => new
+        {
+            When = e.Timestamp.ToLocalTime().ToString("HH:mm:ss"),
+            Model = e.ModelId,
+            Elapsed = e.ElapsedMilliseconds + " ms",
+        }).ToList();
+    }
+
+    /// <summary>
+    /// True when the Performance pane is the one on screen.
+    /// </summary>
+    private bool IsPerformancePaneShowing
+    {
+        get
+        {
+            if (_panes.Length == 0) return false;
+            int idx = Math.Clamp(NavList.SelectedIndex, 0, _panes.Length - 1);
+            return ReferenceEquals(_panes[idx], PerformancePane);
+        }
+    }
+
+    /// <summary>
+    /// Sampling, like upstream's zero-background-cost rule, is allowed only
+    /// while the pane is on screen inside a visible, non-minimized window.
+    /// </summary>
+    private bool IsSamplingAllowed =>
+        IsPerformancePaneShowing && IsVisible && WindowState != System.Windows.WindowState.Minimized;
+
+    /// <summary>
+    /// Single entry point for every state change that can start or end live
+    /// sampling: pane switches, minimize/restore, hide/show and close.
+    /// </summary>
+    private void SyncGpuSamplingToVisibility()
+    {
+        if (IsSamplingAllowed) StartGpuSampling();
+        else StopGpuSampling();
+    }
+
+    /// <summary>
+    /// Entering the pane starts a new generation. The helper resets the tracker's
+    /// baseline before that generation's first read (a fresh baseline for every
+    /// visit) and the 1 s tick keeps both the readouts and the request table
+    /// current.
+    /// </summary>
+    private void StartGpuSampling()
+    {
+        if (_gpuSampling) return;
+        _gpuSampling = true;
+        _gpuEpoch = _gpuSession.Start();
+        _gpuAvailability = PerformanceCounterAvailability.Unknown;
+        ApplyGpuAvailabilityHint();
+        // Requests recorded while the pane sits open show up without reopening it.
+        RefreshPerformanceLog();
+
+        _gpuTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _gpuTimer.Tick -= OnGpuTick;
+        _gpuTimer.Tick += OnGpuTick;
+        _gpuTimer.Start();
+
+        _ = PumpGpuSampleAsync(_gpuEpoch);
+    }
+
+    /// <summary>
+    /// Leaving the pane (or hiding/minimizing/closing the window) stops sampling.
+    /// This returns at once: the helper never waits for a provider read that is
+    /// stuck inside the OS, and it makes any late result stale. The OS read
+    /// itself cannot be cancelled, so it may still complete in the background —
+    /// what is guaranteed is that nothing further is polled and that its result
+    /// is dropped instead of reaching a readout.
+    /// </summary>
+    private void StopGpuSampling()
+    {
+        if (!_gpuSampling) return;
+        _gpuSampling = false;
+        _gpuTimer?.Stop();
+        _gpuSession.Stop();
+
+        // No numbers from the finished visit are left standing to look live.
+        GpuProcessText.Text = "—";
+        GpuDeviceText.Text = "—";
+        GpuMemoryText.Text = "—";
+        _gpuAvailability = PerformanceCounterAvailability.Unknown;
+        ApplyGpuAvailabilityHint();
+    }
+
+    private void OnGpuTick(object? sender, EventArgs e)
+    {
+        // The request table refreshes on every tick even when the counters are
+        // unavailable, so entries recorded while the pane stays open appear
+        // without a manual refresh.
+        RefreshPerformanceLog();
+        _ = PumpGpuSampleAsync(_gpuEpoch);
+    }
+
+    /// <summary>
+    /// Takes at most one reading per generation and writes it only if it still
+    /// belongs to the live one. The continuation here can be deferred by the
+    /// dispatcher, so the generation is checked again after the await: leaving
+    /// the pane, minimizing or re-entering must not let an old reading through.
+    /// </summary>
+    private async Task PumpGpuSampleAsync(int epoch)
+    {
+        var sampled = await _gpuSession.SampleAsync();
+        if (!_gpuSampling || epoch != _gpuEpoch) return;
+        if (!sampled.HasValue) return;
+        if (!sampled.Value.IsCurrent(_gpuSession.CurrentEpoch)) return;
+        ApplyGpuSample(sampled.Value.Sample);
+    }
+
+    private void ApplyGpuSample(GpuUsageSample sample)
+    {
+        GpuProcessText.Text = WindowsGpuUsageProvider.FormatPercent(sample.ProcessUtilizationPercent);
+        GpuDeviceText.Text = WindowsGpuUsageProvider.FormatPercent(sample.DeviceUtilizationPercent);
+        GpuMemoryText.Text = WindowsGpuUsageProvider.FormatBytes(sample.DeviceMemoryBytes);
+        // Availability follows the returned data, never a category-existence probe.
+        _gpuAvailability = PerformanceSamplingSession.Classify(sample);
+        ApplyGpuAvailabilityHint();
+    }
+
+    /// <summary>
+    /// The hint appears only once real data says there is nothing to read. Before
+    /// the first reading of a generation availability is unknown, so the hint
+    /// stays hidden rather than claiming the counters are broken.
+    /// </summary>
+    private void ApplyGpuAvailabilityHint()
+    {
+        GpuUnavailableText.Visibility = _gpuAvailability == PerformanceCounterAvailability.Unavailable
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     // ---------- About ----------

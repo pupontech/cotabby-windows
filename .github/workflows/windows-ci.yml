@@ -48,6 +48,9 @@ jobs:
       - name: Build Windows application
         run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
 
+      - name: Exercise Windows paired GPU counter calculator and safe adapter reads
+        run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
+
       - name: Publish self-contained Windows x64 folder
         run: >-
           dotnet publish src/Cotabby.App/Cotabby.App.csproj
@@ -70,7 +73,8 @@ jobs:
             ('TestsPassed=' + $counts.passed)
             'LiveModelInference=Not tested; owner validation required'
           ) | Set-Content -LiteralPath (Join-Path $root BUILD-INFO.txt) -Encoding utf8
-          Copy-Item docs/upstream-output-budget.md (Join-Path $root FEATURE-NOTES.md)
+          Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
+          Copy-Item docs/upstream-performance-metrics.md (Join-Path $root FEATURE-NOTES.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
@@ -78,6 +82,11 @@ jobs:
             'This build uses your existing Cotabby settings and model cache.'
             'Test tabby-2-nano first, then tabby-2-plus when memory permits.'
             'Try single-line and multi-line completion, the longest length preset, and a mid-line caret.'
+            'Open Settings > Performance. Wait at least two samples; unknown GPU fields show a dash.'
+            'Compare GPU readouts with Task Manager while generating suggestions; per-adapter behavior needs live proof.'
+            'Enable request tracking, generate a suggestion, verify a latency row, then Clear and restart.'
+            'Disable tracking and verify new requests add no rows. Confirm the toggle persists after restart.'
+            'Switch away from Performance and close Settings; GPU sampling must stop.'
             'Check C:\tmp\cotabby-live.log for Model ... loaded and Constrained decode.'
             'Do not share the raw log: it can contain your typed text and local paths.'
             'CI proves tests, compilation, packaging, and CPU native-library loading only.'
