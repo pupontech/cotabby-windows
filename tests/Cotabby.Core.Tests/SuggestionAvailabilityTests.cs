@@ -18,6 +18,7 @@ public class SuggestionAvailabilityTests
         FieldRect = ScreenRect.Empty,
         IsSingleLine = false,
         IsSecure = secure,
+        IsCredentialField = false,
     };
 
     private static KeyboardEvent K(KeyKind kind, char ch = '\0', bool down = true, bool mod = false) =>

@@ -601,6 +601,18 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             return;
         }
 
+        // Typing into a sign-in/verification field is the same violation as
+        // suggesting in one. Focus can move inside a single process without
+        // cancelling the session (cancellation is pid-based), so re-check the
+        // live field here rather than trusting the trigger-time decision.
+        if (field.IsCredentialField)
+        {
+            _logger.LogInformation(
+                "AcceptAsync: focused field is a sign-in/verification field, skip insert.");
+            CancelSession("credential field");
+            return;
+        }
+
         // FINAL FIREWALL before SendInput. If by some path a degenerate
         // suggestion slipped through the engine's guards, trim it here.
         var visible = StripDegenerateTail(textToInsert);

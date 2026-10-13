@@ -32,10 +32,17 @@ log migration or new user-data collection is authorized. Typing-history upstream
 
 ## Owned changes
 
-- `Cotabby.Core/Focus/CredentialFieldDetector.cs`: platform-free policy and lazy
-  admission seam, tested through real production functions.
-- `Cotabby.Win32/Focus/UiaFocusTracker.cs`: UIA metadata collection and rejection
-  before payload reads, followed by address-shaped fallback for admitted fields.
+- `Cotabby.Core/Focus/CredentialFieldDetector.cs`: the platform-free policy,
+  exercised directly by unit tests through the same entry point production
+  calls (`IsCredentialField`).
+- `Cotabby.Win32/Focus/UiaFocusTracker.cs`: UIA metadata collection (`IsPassword`,
+  control type, `Name`, `HelpText`, `LabeledBy.Name`, `AutomationId`) and rejection
+  before any payload read, followed by the address-shaped fallback for admitted
+  fields. A blocked field returns a snapshot flagged `IsCredentialField` with an
+  empty payload.
+- `Cotabby.Core/Suggestions/SuggestionAvailability.cs`,
+  `SuggestionCoordinator.cs`, `Cotabby.App/Emoji/EmojiPickerController.cs`: the
+  gate at every caller — request, trigger, accept and emoji commit.
 - Core tests: upstream recognition and negative-control cases, password override,
   metadata/no-read ordering and ordinary prose preservation.
 - `tools/Cotabby.Tools.CredentialSmoke`: Windows-only synthetic fixture using real
@@ -52,7 +59,11 @@ log migration or new user-data collection is authorized. Typing-history upstream
 3. Ordinary prose fixtures remain capturable. Exact upstream label/id test rows
    are retained, including whole-word boundaries and prose exceptions.
 4. A negative control explicitly reads a synthetic ordinary value and proves the
-   spy is live; a missing fixture/control/focus cannot count as successful denial.
+   spy is live. A rejection must be the guard's own decision: the proof requires a
+   non-null snapshot carrying the fixture process id and `IsCredentialField`, with
+   empty text and no caret offset, so focus loss or a swallowed exception can never
+   be mistaken for a successful denial. The tool reports a skip only when every
+   case failed for infrastructure reasons.
 5. No fixture uses real credentials or prints values. All waits are bounded and
    cleanup targets only the fixture process and its own per-run files.
 6. Local .NET 9 focused/full tests, Windows cross-build and diff checks pass;

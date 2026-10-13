@@ -142,7 +142,11 @@ public sealed class CredentialFieldDetectorTests
     [Fact]
     public void OverlongOrEmptyIdentifiersAreIgnored()
     {
-        Assert.False(CredentialFieldDetector.IdentifierNamesCredential(new string('a', 65)));
+        // Segmentable and credential-bearing, but past the length bound: this
+        // pins the bound itself rather than a name that would fail for other reasons.
+        Assert.True(CredentialFieldDetector.IdentifierNamesCredential("useremail"));
+        Assert.Equal(65, ("email" + new string('a', 60)).Length);
+        Assert.False(CredentialFieldDetector.IdentifierNamesCredential("email" + new string('a', 60)));
         Assert.False(CredentialFieldDetector.IdentifierNamesCredential("   "));
     }
 }

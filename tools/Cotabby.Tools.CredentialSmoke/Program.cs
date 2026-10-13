@@ -182,10 +182,9 @@ internal static class Program
 
         // Every failure was infrastructure, not a policy assertion: the runner
         // could not focus a synthetic UIA window. That is unverified, not unsafe.
-        if (allowHarnessSkip && harnessErrors == failures)
+        if (allowHarnessSkip && harnessErrors == failures && failures == cases.Length)
         {
-            Console.WriteLine("RESULT: SKIP " + failures.ToString(CultureInfo.InvariantCulture) + "/" +
-                              cases.Length.ToString(CultureInfo.InvariantCulture) +
+            Console.WriteLine("RESULT: SKIP 0/" + cases.Length.ToString(CultureInfo.InvariantCulture) +
                               " cases — Windows UIA fixture focus unavailable on this host; " +
                               "credential guards NOT verified here");
             return HarnessSkipExitCode;
@@ -335,10 +334,34 @@ internal static class Program
                 case FixtureExpectation.Reject:
                 case FixtureExpectation.RejectAfterBoundedRead:
                 {
-                    var leaked = snapshot is not null && snapshot.Text.Length > 0;
-                    if (leaked)
+                    // The block must be the tracker's own decision, not an
+                    // incidental null from focus loss, a swallowed exception or a
+                    // control it deemed non-editable. A correct block always
+                    // returns a non-null snapshot flagged as a credential field,
+                    // carrying the real fixture process identity and NO text.
+                    if (snapshot is null)
+                    {
+                        return Harness(fixtureCase, child, "no snapshot at all: cannot attribute the rejection to the credential guard");
+                    }
+
+                    if (snapshot.ProcessId != child.Id)
+                    {
+                        return Fail(fixtureCase, "foreign", readsAfterRefresh, "snapshot did not come from the fixture process");
+                    }
+
+                    if (!snapshot.IsCredentialField)
+                    {
+                        return Fail(fixtureCase, "not-flagged", readsAfterRefresh, "field was refused without being flagged as a credential field");
+                    }
+
+                    if (snapshot.Text.Length > 0)
                     {
                         return Fail(fixtureCase, "text-returned", readsAfterRefresh, "credential-shaped field returned payload text downstream");
+                    }
+
+                    if (snapshot.CaretOffset != 0)
+                    {
+                        return Fail(fixtureCase, "caret-returned", readsAfterRefresh, "credential-shaped field returned a caret offset");
                     }
 
                     if (fixtureCase.Expectation == FixtureExpectation.Reject && readsAfterRefresh != 0)
@@ -395,7 +418,7 @@ internal static class Program
         builder.Append("case=").Append(fixtureCase.CaseId.PadRight(24));
         builder.Append(" expect=").Append(fixtureCase.ExpectationLabel.PadRight(12));
         builder.Append(" reads=").Append(reads.ToString(CultureInfo.InvariantCulture).PadRight(4));
-        builder.Append(" decision=").Append(decision.PadRight(22));
+        builder.Append(" decision=").Append(decision.PadRight(34));
         builder.Append(status);
         if (reason is not null) builder.Append(" (").Append(reason).Append(')');
         return builder.ToString();

@@ -152,6 +152,10 @@ public sealed class UiaFocusTracker : IFocusTracker
             string? automationId = SafeRead(() => info.AutomationId);
             string? name = SafeRead(() => info.Name);
             string? helpText = SafeRead(() => info.HelpText);
+            // Native WinForms/WPF login forms label their input with a separate
+            // Label control rather than the input's own Name, so LabeledBy is the
+            // accessible label that actually carries the text.
+            string? labeledByName = ReadLabeledByName(element);
             string controlType = ControlTypeName(info.ControlType);
 
             // Privacy boundary: a password flag or credential-shaped metadata must
@@ -159,7 +163,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // (Upstream #848.) This also covers password fields, which the tracker
             // used to read first and only mark secure afterwards.
             bool isPassword = SafeRead(() => info.IsPassword);
-            if (IsCredentialBlocked(controlType, name, helpText, automationId, isPassword, text: null))
+            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
                 snapshot = BlockedSnapshot(element, info, isPassword);
                 return true;
@@ -167,14 +171,16 @@ public sealed class UiaFocusTracker : IFocusTracker
 
             if (!IsEditableField(element, info)) return false;
 
-            // Neutral metadata: at most one payload read, for the address-shape
-            // fallback only. If that read reveals a credential, the text must not
-            // travel any further — the returned snapshot carries no text.
+            // Neutral metadata: the payload read below is the single one allowed
+            // for the address-shape fallback (it also produces the completion
+            // prefix). If it reveals a credential, the text must not travel any
+            // further — the returned snapshot carries no text.
             var (text, caretOffset) = ReadTextAndCaret(element);
-            if (IsCredentialBlocked(controlType, name, helpText, automationId, isPassword, text))
+            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text))
             {
                 _logger.LogInformation(
-                    "Sign-in/verification field left alone (host={Host}, control={Control}). No request will be made.",
+                    "Sign-in/verification field left alone (host={Host}, control={Control}). " +
+                    "No text, metadata value or request leaves this read.",
                     TryGetProcessName(info.ProcessId), controlType);
                 snapshot = BlockedSnapshot(element, info, isPassword);
                 return true;
@@ -240,22 +246,45 @@ public sealed class UiaFocusTracker : IFocusTracker
         string controlType,
         string? name,
         string? helpText,
+        string? labeledByName,
         string? automationId,
         bool isPassword,
         string? text) =>
         CredentialFieldDetector.IsCredentialField(
             controlType,
-            Labels(name, helpText),
+            Labels(name, helpText, labeledByName),
             automationId,
             text,
             isPassword);
 
     /// <summary>UIA accessible-name sources, each evaluated independently so a
     /// prose word in one cannot mask a credential word in another.</summary>
-    private static IEnumerable<string?> Labels(string? name, string? helpText)
+    private static IEnumerable<string?> Labels(string? name, string? helpText, string? labeledByName)
     {
         yield return name;
         yield return helpText;
+        yield return labeledByName;
+    }
+
+    /// <summary>Name of the element this control is labelled by, if any.</summary>
+    private static string? ReadLabeledByName(AutomationElement element)
+    {
+        try
+        {
+            return element.GetCurrentPropertyValue(AutomationElement.LabeledByProperty) is AutomationElement label
+                ? SafeReadName(label)
+                : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? SafeReadName(AutomationElement element)
+    {
+        try { return element.Current.Name; }
+        catch (Exception) { return null; }
     }
 
     private static string ControlTypeName(ControlType controlType) =>

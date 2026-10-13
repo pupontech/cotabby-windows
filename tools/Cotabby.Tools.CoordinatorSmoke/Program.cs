@@ -69,6 +69,7 @@ focus.SetField(new FocusedField
     FieldRect = new ScreenRect(0, 0, 800, 600),
     IsSingleLine = false,
     IsSecure = false,
+    IsCredentialField = false,
 });
 
 Console.WriteLine("[coord] Simulating realistic rapid typing 'def fib'…");
@@ -223,6 +224,7 @@ focus.SetField(new FocusedField
     FieldRect = new ScreenRect(800, 600, 1000, 200),
     IsSingleLine = false,
     IsSecure = false,
+    IsCredentialField = false,
 });
 // Give the cancelled generation time to fully drain.
 await Task.Delay(3000);

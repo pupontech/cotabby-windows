@@ -145,8 +145,10 @@ public sealed class EmojiPickerController : IDisposable
             await EatCharsAsync(eat, CancellationToken.None);
             await _inserter.InsertAsync(field, entry.Glyph, CancellationToken.None);
 
+            // Deliberately logs the catalog name, not the typed query: the query
+            // is user text and is not written to the local log.
             _logger.LogInformation(
-                "Emoji committed: query=\":{Query}:\" → {Glyph} (eaten chars={Eat})",
+                "Emoji committed: catalog=\"{Catalog}\" → {Glyph} (eaten chars={Eat})",
                 entry.Name, entry.Glyph, eat);
         }
         catch (Exception ex)

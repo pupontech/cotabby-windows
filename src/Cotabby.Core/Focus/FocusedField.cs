@@ -44,7 +44,7 @@ public sealed record FocusedField
     /// from metadata before any payload read; every suggestion/emoji caller must
     /// refuse such a field so no credential text reaches a request.
     /// </summary>
-    public bool IsCredentialField { get; init; }
+    public required bool IsCredentialField { get; init; }
 }
 
 /// <summary>Screen rectangle in physical pixels.</summary>
