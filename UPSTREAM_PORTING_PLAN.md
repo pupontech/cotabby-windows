@@ -31,7 +31,8 @@ Bring high-value, compatible improvements from the original Cotabby project into
 | Feature | Upstream source | Windows status |
 | --- | --- | --- |
 | Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Merged (`046d7cf`); Windows live-validated by the owner on a test build, tagged release still pending |
-| Performance metrics (GPU readouts + request latency; CPU/RAM graphs not ported) | [#858 / `8cdbea2`](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343) | Implemented on `feat/upstream-performance-metrics`; local tests/build/publish; Windows CI and owner live proof pending |
+| Performance metrics (GPU readouts + request latency; CPU/RAM graphs not ported) | [#858 / `8cdbea2`](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343) | Merged PR #2 (`031ff0f`); 172 tests and post-merge Windows CI passed; owner confirmed tracking/Clear, other live GPU/restart scenarios unconfirmed |
+| Sign-in and verification-field protection | [#848 / `d81d304`](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c) | In progress on `codex/upstream-credential-fields`; synthetic Windows UIA proof and independent review required |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
@@ -39,7 +40,7 @@ estimator; FIM uses the loaded context too. No new UI/settings, model catalog,
 telemetry, cloud inference, or native decoding algorithm changes are included.
 Do not mark full runtime parity until the owner runs the extracted Windows test
 ZIP with a small model and a relevant larger model and verifies real suggestions.
-The earlier output-budget PR was merged after owner acceptance. For this performance-metrics feature, branch/PR/CI test-ZIP delivery is allowed; merge and release remain gated on new owner acceptance.
+The earlier output-budget and performance-metrics PRs were merged after the owner's authorization. The owner confirmed performance tracking and Clear; other GPU/restart scenarios are not blanket accepted. Further focused upstream ports may proceed through independent review and Windows CI under the owner's "continue onto more merges" instruction. Tags and releases still require separate authorization.
 
 See [the implementation and acceptance note](docs/upstream-performance-metrics.md).
 Windows reads the same contract from the Windows "GPU Engine" / "GPU Adapter

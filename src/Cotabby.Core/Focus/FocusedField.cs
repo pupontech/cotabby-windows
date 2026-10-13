@@ -37,6 +37,14 @@ public sealed record FocusedField
 
     /// <summary>True if the field is a password field — suggestions must be suppressed.</summary>
     public required bool IsSecure { get; init; }
+
+    /// <summary>
+    /// True for a recognized sign-in, verification or payment-identity field
+    /// (email, username, phone, OTP, card). The platform adapter decides this
+    /// from metadata before any payload read; every suggestion/emoji caller must
+    /// refuse such a field so no credential text reaches a request.
+    /// </summary>
+    public bool IsCredentialField { get; init; }
 }
 
 /// <summary>Screen rectangle in physical pixels.</summary>

@@ -342,6 +342,16 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     private void TriggerGeneration(FocusedField fieldAtTrigger)
     {
+        // Single admission point for every caller, including the post-exhaustion
+        // continuation in AcceptAsync which never goes through ShouldRequest. A
+        // sign-in/verification field must never have its text built into a request.
+        if (fieldAtTrigger.IsCredentialField)
+        {
+            _logger.LogDebug("TriggerGeneration skipped: sign-in/verification field ({Host}).",
+                fieldAtTrigger.ProcessName);
+            return;
+        }
+
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
         var pid = fieldAtTrigger.ProcessId;
         var metrics = PerformanceMetrics;

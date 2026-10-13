@@ -78,9 +78,10 @@ public sealed class EmojiPickerController : IDisposable
         if (!_state.IsActive && args.Event.Kind == KeyKind.Character && args.Event.Character == ':')
         {
             _triggerField = _focus.Refresh();
-            if (_triggerField is null || _triggerField.IsSecure)
+            if (_triggerField is null || _triggerField.IsSecure || _triggerField.IsCredentialField)
             {
-                return; // Don't start in fields where we can't insert anyway.
+                return; // Don't start in fields where we can't insert anyway,
+                        // or in a sign-in/verification field we must leave alone.
             }
         }
 
@@ -131,7 +132,7 @@ public sealed class EmojiPickerController : IDisposable
         try
         {
             var field = _focus.Refresh() ?? _triggerField;
-            if (field is null) return;
+            if (field is null || field.IsCredentialField) return;
 
             // The user typed ":query:" — eat those characters with backspaces
             // before inserting the glyph. Length of ":query:" = query + 2.

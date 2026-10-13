@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
+using System.Windows.Automation.Provider;
 using Cotabby.Core.Focus;
 using Cotabby.Win32.Interop;
 using Microsoft.Extensions.Logging;
@@ -147,9 +148,55 @@ public sealed class UiaFocusTracker : IFocusTracker
 
         try
         {
-            if (!IsEditableField(element)) return false;
-            snapshot = BuildSnapshot(element);
-            return snapshot is not null;
+            var info = element.Current;
+            string? automationId = SafeRead(() => info.AutomationId);
+            string? name = SafeRead(() => info.Name);
+            string? helpText = SafeRead(() => info.HelpText);
+            string controlType = ControlTypeName(info.ControlType);
+
+            // Privacy boundary: a password flag or credential-shaped metadata must
+            // reject the field BEFORE any TextPattern/ValuePattern payload read.
+            // (Upstream #848.) This also covers password fields, which the tracker
+            // used to read first and only mark secure afterwards.
+            bool isPassword = SafeRead(() => info.IsPassword);
+            if (IsCredentialBlocked(controlType, name, helpText, automationId, isPassword, text: null))
+            {
+                snapshot = BlockedSnapshot(element, info, isPassword);
+                return true;
+            }
+
+            if (!IsEditableField(element, info)) return false;
+
+            // Neutral metadata: at most one payload read, for the address-shape
+            // fallback only. If that read reveals a credential, the text must not
+            // travel any further — the returned snapshot carries no text.
+            var (text, caretOffset) = ReadTextAndCaret(element);
+            if (IsCredentialBlocked(controlType, name, helpText, automationId, isPassword, text))
+            {
+                _logger.LogInformation(
+                    "Sign-in/verification field left alone (host={Host}, control={Control}). No request will be made.",
+                    TryGetProcessName(info.ProcessId), controlType);
+                snapshot = BlockedSnapshot(element, info, isPassword);
+                return true;
+            }
+
+            var caretRect = ReadCaretRect(element);
+            var fieldRect = ToScreenRect(info.BoundingRectangle);
+
+            snapshot = new FocusedField
+            {
+                ElementHandle = element,
+                ProcessId = info.ProcessId,
+                ProcessName = TryGetProcessName(info.ProcessId),
+                Text = text,
+                CaretOffset = caretOffset,
+                CaretRect = caretRect.IsEmpty ? fieldRect : caretRect,
+                FieldRect = fieldRect,
+                IsSingleLine = controlType == "Edit",
+                IsSecure = isPassword,
+                IsCredentialField = false,
+            };
+            return true;
         }
         catch (ElementNotAvailableException) { return false; }
         catch (Exception ex)
@@ -159,11 +206,82 @@ public sealed class UiaFocusTracker : IFocusTracker
         }
     }
 
-    private static bool IsEditableField(AutomationElement element)
+    /// <summary>
+    /// Builds a snapshot for a field Cotabby must not suggest into. It carries the
+    /// geometry and process identity (so the coordinator tears down cleanly) but
+    /// deliberately NO text: the payload is never propagated once the field is
+    /// recognized as a sign-in/verification input.
+    /// </summary>
+    private FocusedField BlockedSnapshot(
+        AutomationElement element, AutomationElement.AutomationElementInformation info, bool isPassword)
+    {
+        var fieldRect = ToScreenRect(info.BoundingRectangle);
+        return new FocusedField
+        {
+            ElementHandle = element,
+            ProcessId = info.ProcessId,
+            ProcessName = TryGetProcessName(info.ProcessId),
+            Text = string.Empty,
+            CaretOffset = 0,
+            CaretRect = fieldRect,
+            FieldRect = fieldRect,
+            IsSingleLine = ControlTypeName(info.ControlType) == "Edit",
+            IsSecure = isPassword,
+            IsCredentialField = true,
+        };
+    }
+
+    /// <summary>
+    /// The single credential decision. Metadata is evaluated before any payload
+    /// read; when <paramref name="text"/> is supplied (the one read allowed for a
+    /// neutral field) it is the address-shape fallback.
+    /// </summary>
+    private static bool IsCredentialBlocked(
+        string controlType,
+        string? name,
+        string? helpText,
+        string? automationId,
+        bool isPassword,
+        string? text) =>
+        CredentialFieldDetector.IsCredentialField(
+            controlType,
+            Labels(name, helpText),
+            automationId,
+            text,
+            isPassword);
+
+    /// <summary>UIA accessible-name sources, each evaluated independently so a
+    /// prose word in one cannot mask a credential word in another.</summary>
+    private static IEnumerable<string?> Labels(string? name, string? helpText)
+    {
+        yield return name;
+        yield return helpText;
+    }
+
+    private static string ControlTypeName(ControlType controlType) =>
+        controlType == ControlType.Edit ? "Edit"
+        : controlType == ControlType.Document ? "Document"
+        : controlType == ControlType.Pane ? "Pane"
+        : controlType == ControlType.ComboBox ? "ComboBox"
+        : controlType.ProgrammaticName ?? string.Empty;
+
+    private string? SafeRead(Func<string> read)
+    {
+        try { return read(); }
+        catch (Exception) { return null; }
+    }
+
+    private bool SafeRead(Func<bool> read)
+    {
+        try { return read(); }
+        catch (Exception) { return false; }
+    }
+
+    private static bool IsEditableField(
+        AutomationElement element, AutomationElement.AutomationElementInformation info)
     {
         try
         {
-            var info = element.Current;
             if (!info.IsEnabled) return false;
             // IsKeyboardFocusable is unreliable — Win11 Notepad's RichEditBox
             // exposes false for the document control even though it accepts
@@ -186,39 +304,13 @@ public sealed class UiaFocusTracker : IFocusTracker
 
             // Require at least one of TextPattern or ValuePattern so we know we
             // can actually read text out of this element. Without that the
-            // request would have an empty prefix.
+            // request would have an empty prefix. Called only after the
+            // credential check, so this probe never runs on a blocked field.
             bool hasText = element.TryGetCurrentPattern(TextPattern.Pattern, out _);
             bool hasValue = element.TryGetCurrentPattern(ValuePattern.Pattern, out _);
             return hasText || hasValue;
         }
         catch (Exception) { return false; }
-    }
-
-    private FocusedField? BuildSnapshot(AutomationElement element)
-    {
-        var info = element.Current;
-
-        int pid = info.ProcessId;
-        string procName = TryGetProcessName(pid);
-        bool isPassword = info.IsPassword;
-        bool isSingleLine = info.ControlType == ControlType.Edit;
-
-        var (text, caretOffset) = ReadTextAndCaret(element);
-        var caretRect = ReadCaretRect(element);
-        var fieldRect = ToScreenRect(info.BoundingRectangle);
-
-        return new FocusedField
-        {
-            ElementHandle = element,
-            ProcessId = pid,
-            ProcessName = procName,
-            Text = text,
-            CaretOffset = caretOffset,
-            CaretRect = caretRect.IsEmpty ? fieldRect : caretRect,
-            FieldRect = fieldRect,
-            IsSingleLine = isSingleLine,
-            IsSecure = isPassword,
-        };
     }
 
     private (string text, int caretOffset) ReadTextAndCaret(AutomationElement element)

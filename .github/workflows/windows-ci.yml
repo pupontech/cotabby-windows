@@ -51,6 +51,19 @@ jobs:
       - name: Exercise Windows paired GPU counter calculator and safe adapter reads
         run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
 
+      - name: Verify credential privacy through real Windows UI Automation
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project tools/Cotabby.Tools.CredentialSmoke/Cotabby.Tools.CredentialSmoke.csproj -c Release -p:EnableWindowsTargeting=true -- --allow-harness-skip
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output 'CREDENTIAL_UIA_PROOF=PASSED'
+          } elseif ($code -eq 4) {
+            Write-Output 'CREDENTIAL_UIA_PROOF=SKIPPED_NO_INTERACTIVE_DESKTOP (owner must verify on real Windows)'
+          } else {
+            throw "Credential UIA proof failed with exit code $code"
+          }
+
       - name: Publish self-contained Windows x64 folder
         run: >-
           dotnet publish src/Cotabby.App/Cotabby.App.csproj
@@ -69,12 +82,13 @@ jobs:
           $root = (Resolve-Path artifacts/Cotabby-win-x64).Path
           @(
             ('SourceCommit=' + $source)
-            'BuildKind=Unmerged feature test build; not a release'
+            'BuildKind=Development/test build; not a tagged release'
             ('TestsPassed=' + $counts.passed)
             'LiveModelInference=Not tested; owner validation required'
           ) | Set-Content -LiteralPath (Join-Path $root BUILD-INFO.txt) -Encoding utf8
           Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
-          Copy-Item docs/upstream-performance-metrics.md (Join-Path $root FEATURE-NOTES.md)
+          Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
+          Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
@@ -87,9 +101,12 @@ jobs:
             'Enable request tracking, generate a suggestion, verify a latency row, then Clear and restart.'
             'Disable tracking and verify new requests add no rows. Confirm the toggle persists after restart.'
             'Switch away from Performance and close Settings; GPU sampling must stop.'
+            'Credential protection: use dummy values only. Username, verification, card and password inputs should receive no suggestions.'
+            'Ordinary writing, email subjects and document-style email bodies should still work.'
+            'Browser accessibility metadata varies; this is not complete DOM/autofill parity.'
             'Check C:\tmp\cotabby-live.log for Model ... loaded and Constrained decode.'
             'Do not share the raw log: it can contain your typed text and local paths.'
-            'CI proves tests, compilation, packaging, and CPU native-library loading only.'
+            'CI proves tests, compilation, packaging, native loading and synthetic Windows UIA credential guards.'
             'Real model decoding, UI suggestions, and GPU behavior still require owner testing.'
           ) | Set-Content -LiteralPath (Join-Path $root README-TEST.txt) -Encoding utf8
           $records = @(Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
