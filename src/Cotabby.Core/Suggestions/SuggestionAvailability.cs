@@ -27,6 +27,9 @@ public static class SuggestionAvailability
     {
         if (field is null) return false;
         if (field.IsSecure) return false;
+        // Never suggest into a sign-in, verification or payment-identity field:
+        // a completion there guesses the user's identity or code.
+        if (field.IsCredentialField) return false;
         // Never suggest into our own windows (settings, welcome wizard,
         // emoji popup) — ghost text over Cotabby's own text boxes is both
         // useless and confusing. The macOS app has the same self-exclusion.

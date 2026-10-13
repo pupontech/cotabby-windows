@@ -71,6 +71,43 @@ public sealed class SuggestionPerformanceMetricsTests
         Assert.Empty(harness.Metrics.Entries);
     }
 
+    [Fact]
+    public async Task AcceptRefusesToInsertIntoASignInFieldFocusedAfterTheSuggestionShowed()
+    {
+        // Focus can move onto a sign-in field inside one process without the
+        // pid-based cancellation firing, so the accept path must re-check the
+        // live field instead of trusting the trigger-time decision.
+        await using var harness = new Harness(waitAfterFinalChunk: false);
+        harness.Start("model");
+        harness.Hook.EmitCharacter(harness.Ui);
+        await harness.Engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        harness.Engine.ReleaseOutput.TrySetResult();
+        await harness.Ui.WaitForPendingAtLeastAsync(4);
+        harness.Ui.DrainAll();
+        Assert.Equal(1, harness.Overlay.ShowCount);
+
+        harness.Focus.MakeCredentialField();
+        harness.Hook.EmitAcceptTab(harness.Ui);
+        await Task.Delay(50);
+        harness.Ui.DrainAll();
+
+        Assert.Equal(0, harness.Inserter.InsertCount);
+    }
+
+    [Fact]
+    public async Task NoRequestIsMadeForAFieldAlreadyFlaggedAsSignIn()
+    {
+        await using var harness = new Harness(waitAfterFinalChunk: false);
+        harness.Start("model");
+        harness.Focus.MakeCredentialField();
+        harness.Hook.EmitCharacter(harness.Ui);
+
+        // The gate is upstream of the engine, so it must never even start.
+        var started = await Task.WhenAny(harness.Engine.Started.Task, Task.Delay(300)) == harness.Engine.Started.Task;
+        Assert.False(started);
+        Assert.Equal(0, harness.Overlay.ShowCount);
+    }
+
     private sealed class Harness : IAsyncDisposable
     {
         public QueuedSynchronizationContext Ui { get; } = new();
@@ -79,6 +116,8 @@ public sealed class SuggestionPerformanceMetricsTests
         public RecordingOverlay Overlay { get; } = new();
         public TestKeyboardHook Hook { get; } = new();
         public SuggestionWorkController Work { get; } = new(TimeSpan.FromMilliseconds(1));
+        public TestFocusTracker Focus { get; } = new();
+        public TestTextInserter Inserter { get; } = new();
         public SuggestionCoordinator Coordinator { get; }
 
         public Harness(bool waitAfterFinalChunk)
@@ -86,10 +125,10 @@ public sealed class SuggestionPerformanceMetricsTests
             Engine = new ControlledSuggestionEngine(waitAfterFinalChunk);
             Coordinator = new SuggestionCoordinator(
                 Hook,
-                new TestFocusTracker(),
+                Focus,
                 Engine,
                 Overlay,
-                new TestTextInserter(),
+                Inserter,
                 Work,
                 NullLogger<SuggestionCoordinator>.Instance,
                 Ui)
@@ -200,6 +239,26 @@ public sealed class SuggestionPerformanceMetricsTests
         public void Stop() { }
         public void Dispose() { }
 
+        public void EmitAcceptTab(SynchronizationContext ui)
+        {
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(ui);
+            try
+            {
+                KeyEvent?.Invoke(this, new KeyEventArgs(new KeyboardEvent
+                {
+                    Kind = KeyKind.Tab,
+                    Character = '\0',
+                    HasNonShiftModifier = false,
+                    IsKeyDown = true,
+                }));
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+        }
+
         public void EmitCharacter(SynchronizationContext ui)
         {
             var previous = SynchronizationContext.Current;
@@ -224,7 +283,7 @@ public sealed class SuggestionPerformanceMetricsTests
 
     private sealed class TestFocusTracker : IFocusTracker
     {
-        private readonly FocusedField _field = new()
+        private FocusedField _field = new()
         {
             ElementHandle = new object(),
             ProcessId = Environment.ProcessId + 1,
@@ -235,7 +294,12 @@ public sealed class SuggestionPerformanceMetricsTests
             FieldRect = new ScreenRect(0, 0, 100, 30),
             IsSingleLine = true,
             IsSecure = false,
+            IsCredentialField = false,
         };
+
+        /// <summary>Simulate focus moving onto a sign-in field within one process.</summary>
+        public void MakeCredentialField() =>
+            _field = _field with { IsCredentialField = true, Text = string.Empty };
 
         public FocusedField? Current => _field;
         public event EventHandler<FocusedField?>? FocusChanged
@@ -260,7 +324,12 @@ public sealed class SuggestionPerformanceMetricsTests
 
     private sealed class TestTextInserter : ITextInserter
     {
+        public int InsertCount { get; private set; }
+
         public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
-            => Task.FromResult(true);
+        {
+            InsertCount++;
+            return Task.FromResult(true);
+        }
     }
 }

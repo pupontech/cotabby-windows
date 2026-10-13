@@ -342,6 +342,16 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     private void TriggerGeneration(FocusedField fieldAtTrigger)
     {
+        // Single admission point for every caller, including the post-exhaustion
+        // continuation in AcceptAsync which never goes through ShouldRequest. A
+        // sign-in/verification field must never have its text built into a request.
+        if (fieldAtTrigger.IsCredentialField)
+        {
+            _logger.LogDebug("TriggerGeneration skipped: sign-in/verification field ({Host}).",
+                fieldAtTrigger.ProcessName);
+            return;
+        }
+
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
         var pid = fieldAtTrigger.ProcessId;
         var metrics = PerformanceMetrics;
@@ -588,6 +598,18 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         {
             _logger.LogInformation("AcceptAsync: no focused field at accept time, cancel.");
             CancelSession("no field at accept");
+            return;
+        }
+
+        // Typing into a sign-in/verification field is the same violation as
+        // suggesting in one. Focus can move inside a single process without
+        // cancelling the session (cancellation is pid-based), so re-check the
+        // live field here rather than trusting the trigger-time decision.
+        if (field.IsCredentialField)
+        {
+            _logger.LogInformation(
+                "AcceptAsync: focused field is a sign-in/verification field, skip insert.");
+            CancelSession("credential field");
             return;
         }
 

@@ -63,6 +63,7 @@ var fakeField = new FocusedField
     FieldRect = ScreenRect.Empty,
     IsSingleLine = false,
     IsSecure = false,
+    IsCredentialField = false,
 };
 var request = SuggestionRequestFactory.Build(fakeField, "smoke");
 

@@ -29,6 +29,13 @@ Read `PROJECT_HISTORY.md` before changing architecture or describing provenance.
    `Content-Length`, correct FIM capability, context length, and a README row.
 5. Do not publish a single-file executable. LLamaSharp needs the complete
    `runtimes\\win-x64` native layout beside `Cotabby.exe`.
+6. Sign-in, verification and payment-identity fields are left alone. Decide this
+   from field metadata (password flag, whole-word accessible labels, bounded
+   automation identifiers) *before* reading text/value into a snapshot, and keep
+   the same gate on every caller — the suggestion path, the post-exhaustion
+   continuation and the emoji picker. Treat `IsCredentialField` as the single
+   policy flag; do not re-derive it per call site. Never log field text, request
+   prefixes or credential metadata.
 
 ## Verification
 

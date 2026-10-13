@@ -17,6 +17,7 @@ public class SuggestionRequestFactoryTests
         FieldRect = ScreenRect.Empty,
         IsSingleLine = singleLine,
         IsSecure = false,
+        IsCredentialField = false,
     };
 
     [Fact]

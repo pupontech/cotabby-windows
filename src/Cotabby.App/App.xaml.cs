@@ -238,6 +238,7 @@ public partial class App : Application
                 FieldRect = new Cotabby.Core.Focus.ScreenRect(0, 0, 1000, 800),
                 IsSingleLine = false,
                 IsSecure = false,
+                IsCredentialField = false,
             };
             focus.SetFakeFieldForTesting(fakeField);
             hook.FireSyntheticKey(new Cotabby.Core.Input.KeyboardEvent
