@@ -11,6 +11,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>Cotabby.App</RootNamespace>
     <AssemblyName>Cotabby</AssemblyName>
+    <!-- Single source of truth for the shipped version: the repo-root VERSION
+         file. The release workflow asserts it matches the pushed tag. -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
     <ApplicationIcon>Assets\Cotabby.ico</ApplicationIcon>

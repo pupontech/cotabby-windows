@@ -32,7 +32,8 @@ Bring high-value, compatible improvements from the original Cotabby project into
 | --- | --- | --- |
 | Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Merged (`046d7cf`); Windows live-validated by the owner on a test build, tagged release still pending |
 | Performance metrics (GPU readouts + request latency; CPU/RAM graphs not ported) | [#858 / `8cdbea2`](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343) | Merged PR #2 (`031ff0f`); 172 tests and post-merge Windows CI passed; owner confirmed tracking/Clear, other live GPU/restart scenarios unconfirmed |
-| Sign-in and verification-field protection | [#848 / `d81d304`](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c) | In progress on `codex/upstream-credential-fields`; synthetic Windows UIA proof and independent review required |
+| Sign-in and verification-field protection | [#848 / `d81d304`](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c) | Merged PR #3 (`8251b7d`); 231 tests, real-UIA credential proof and independent review passed; browser metadata coverage varies |
+| Opt-in typing history | [#841 / `c3d17c1`](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428) | Not ported. It would create the first durable on-device store of user text; needs an explicit privacy decision (encryption/key custody, retention, delete-all, Cotypist import provenance) first. |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
@@ -40,7 +41,7 @@ estimator; FIM uses the loaded context too. No new UI/settings, model catalog,
 telemetry, cloud inference, or native decoding algorithm changes are included.
 Do not mark full runtime parity until the owner runs the extracted Windows test
 ZIP with a small model and a relevant larger model and verifies real suggestions.
-The earlier output-budget and performance-metrics PRs were merged after the owner's authorization. The owner confirmed performance tracking and Clear; other GPU/restart scenarios are not blanket accepted. Further focused upstream ports may proceed through independent review and Windows CI under the owner's "continue onto more merges" instruction. Tags and releases still require separate authorization.
+Shipped in `v0.3.0`: output-budget reservation, the partial Performance pane and credential-field protection. The owner authorized those merges; the tag/release was separately authorized. Live model decoding, physical GPU readings and per-adapter behavior stay owner-verified. The owner confirmed performance tracking and Clear; other GPU/restart scenarios are not blanket accepted. Further focused upstream ports may proceed through independent review and Windows CI under the owner's "continue onto more merges" instruction. Tags and releases still require separate authorization.
 
 See [the implementation and acceptance note](docs/upstream-performance-metrics.md).
 Windows reads the same contract from the Windows "GPU Engine" / "GPU Adapter

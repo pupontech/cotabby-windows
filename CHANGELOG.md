@@ -1,16 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-13
 
 ### Added
 
+- Port upstream [sign-in and verification-field protection (#848)](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c):
+  Cotabby leaves email, username, phone, one-time-code, card and password inputs
+  alone. The Windows tracker decides from field metadata — password flag,
+  whole-word accessible label (`Name`, `HelpText`, `LabeledBy.Name`) and bounded
+  automation identifier — **before** reading any field text, and returns a
+  snapshot with no text for a recognized field. A neutral single-line field may be
+  read once for the address-shape fallback; rejected text never travels further.
+  The gate applies to every caller: the request path, the trigger entry point (the
+  post-exhaustion continuation previously bypassed the primary check), the
+  accept/insert path, and the emoji trigger and commit.
 - Port upstream [GPU usage in the Performance pane (#858)](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343)
-  as a partial Windows Performance pane (no CPU/RAM graphs): live Cotabby GPU share, busiest-engine machine GPU
-  utilization and GPU memory read from the `GPU Engine` / `GPU Adapter Memory`
-  performance counters, plus an opt-in log of per-request latency (timestamp,
-  model, elapsed; newest retained, off by default). Every GPU value is optional,
-  so an unavailable counter set shows "no data" rather than a misleading zero,
-  and sampling runs only while the pane is open.
+  as a partial Windows Performance pane (no CPU/RAM graphs): live Cotabby GPU
+  share, busiest-engine machine GPU utilization and GPU memory read from the
+  `GPU Engine` / `GPU Adapter Memory` performance counters, plus an opt-in log of
+  per-request latency (timestamp, model, elapsed; newest 200 retained, off by
+  default). Every GPU value is optional, so an unavailable counter set shows "no
+  data" rather than a misleading zero, and sampling runs only while the pane is
+  visible. Latency rows are recorded only for generations actually shown to the
+  user.
 
 - `tabby-2-plus`: Qwen3.5 4B Base Q4_K_M for general-purpose autocomplete.
 - `tabby-2-code`: Qwen3.5 9B Coder Q4_K_S for programming-focused autocomplete.
@@ -27,11 +39,31 @@
 - Trim low-priority prompt sections before caret text; preserve the caret tail
   without splitting UTF-16 surrogate pairs. Exhausted budgets produce no prompt.
 - FIM prompt capacity now follows the loaded context rather than a fixed 4096.
-- Add Windows PR CI tests, build, folder publish, full package hash verification,
-  and extracted CPU DLL loading. Real model/UI/GPU validation remains pending.
+- GPU readouts retain consecutive raw counter samples instead of discarding rate
+  baselines, keep adapter/engine identity, and report unknown rather than a
+  fabricated zero; a per-engine counter reset can no longer be hidden by growth
+  on another engine.
+- The release workflow verifies provenance, the full package manifest, the
+  required native layout and the absence of model/log/secret files, and publishes
+  a SHA-256 checksum beside the ZIP. The app reports its version from `VERSION`.
+- Windows CI additionally runs a synthetic real-UI-Automation credential proof
+  (password, username, verification-code and card fields must be refused with zero
+  payload reads) and a GPU counter/persistence smoke test.
 
 ### Maintained
 
 - Existing nano, mini, Gemma E2B, and Gemma E4B model choices.
 - Folder-based self-contained Windows release packaging with native LLamaSharp
   runtime files beside the executable.
+- Inference stays local: no telemetry, no cloud completion, no typing-history
+  storage. Upstream's typing-history feature (#841) is deliberately not ported.
+
+### Known limits
+
+- GPU accuracy, per-adapter behavior and minimize/restore on real hardware are
+  owner-verified only. Hosted CI proves API compatibility, packaging and the
+  synthetic credential guards — not live readings or live autocomplete.
+- Browser/application accessibility metadata varies; credential recognition is
+  metadata-based and is not complete DOM/autofill parity.
+- The local live log records rendered suggestions, not typed text, and should not
+  be shared.

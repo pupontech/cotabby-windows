@@ -1,5 +1,8 @@
 # Cotabby for Windows
 
+**Current release: v0.3.0** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
+in [`VERSION`](VERSION) and is stamped into the shipped build).
+
 Local AI autocomplete for Windows. A system-wide ghost-text suggestion engine that
 runs entirely on-device via [llama.cpp](https://github.com/ggerganov/llama.cpp), with
 no cloud calls and no telemetry.
@@ -150,6 +153,8 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Base-completion prompt pipeline (persona / language / budgeted sections) | ✅ |
 | Whole-request output reservation ([upstream #851](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868)) | ✅ (live-validated by the owner on the `bb3469f` test build) |
 | Performance pane: live GPU readouts + opt-in request latency (partial port; no CPU/RAM graphs) ([upstream #858](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343)) | Merged; Windows CI passed, owner confirmed tracking/Clear; physical GPU accuracy remains unconfirmed |
+| Sign-in and verification fields left alone ([upstream #848](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c)) | ✅ metadata-based (password flag, accessible label, automation id, address shape); browser metadata coverage varies, not full DOM parity |
+| Opt-in typing history ([upstream #841](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428)) | ❌ deliberately not ported; storing user text on disk needs a separate privacy decision |
 | Constrained greedy decode (top-20 argmax, no-repeat-3-gram, sentence stops) | ✅ |
 | One-shot output normalizer (echo strip, dup filter, safety gate) | ✅ |
 | Fill-in-middle for mid-line carets | ✅ (Qwen3.5 models)       |

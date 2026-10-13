@@ -9,12 +9,22 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-release:
     runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
     steps:
-      - name: Check out source
+      - name: Check out the tagged commit
         uses: actions/checkout@v4
 
       - name: Set up .NET 9
@@ -26,32 +36,189 @@ jobs:
         run: dotnet restore Cotabby.sln
 
       - name: Test
-        run: dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore
+        run: >-
+          dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj
+          -c Release --no-restore
+          --logger "trx;LogFileName=core-tests.trx"
+          --results-directory artifacts/test-results
+
+      - name: Build Windows application
+        run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
+
+      - name: Exercise Windows paired GPU counter calculator and safe adapter reads
+        run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
+
+      - name: Verify credential privacy through real Windows UI Automation
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project tools/Cotabby.Tools.CredentialSmoke/Cotabby.Tools.CredentialSmoke.csproj -c Release -p:EnableWindowsTargeting=true -- --allow-harness-skip
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output 'CREDENTIAL_UIA_PROOF=PASSED'
+          } elseif ($code -eq 4) {
+            Write-Output 'CREDENTIAL_UIA_PROOF=SKIPPED_NO_INTERACTIVE_DESKTOP (owner must verify on real Windows)'
+          } else {
+            throw "Credential UIA proof failed with exit code $code"
+          }
 
       - name: Publish self-contained Windows x64 folder
         run: >-
           dotnet publish src/Cotabby.App/Cotabby.App.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=false
-          -o artifacts/Cotabby-win-x64
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=false -o artifacts/Cotabby-win-x64
 
-      - name: Create ZIP
-        shell: pwsh
+      - name: Verify version, tests, package provenance and native layout
         run: |
-          $zip = "artifacts/Cotabby-win-x64.zip"
-          Compress-Archive -Path "artifacts/Cotabby-win-x64/*" -DestinationPath $zip
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -Raw VERSION).Trim()
+          $source = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $source -cne $env:GITHUB_SHA) { throw 'Source SHA mismatch' }
 
-      - name: Upload workflow artifact
+          # A release must carry the version it claims. On a tag build the tag and
+          # the VERSION file have to agree, so a stale VERSION cannot ship.
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $expected = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($version -cne $expected) { throw "VERSION $version does not match tag $env:GITHUB_REF_NAME" }
+          }
+
+          [xml]$trx = Get-Content -Raw artifacts/test-results/core-tests.trx
+          $counts = $trx.TestRun.ResultSummary.Counters
+          if ([int]$counts.total -le 0 -or [int]$counts.total -ne [int]$counts.passed -or
+              [int]$counts.executed -ne [int]$counts.total) { throw 'Not all tests passed/executed' }
+
+          $root = (Resolve-Path artifacts/Cotabby-win-x64).Path
+          $appVersion = (Get-Item (Join-Path $root 'Cotabby.dll')).VersionInfo.ProductVersion
+          if ($appVersion -and -not $appVersion.StartsWith($version)) {
+            throw "Packaged app reports version '$appVersion' but VERSION is '$version'"
+          }
+
+          @(
+            ('SourceCommit=' + $source)
+            ('Version=' + $version)
+            'BuildKind=Release build from a tagged commit'
+            ('TestsPassed=' + $counts.passed)
+            'LiveModelInference=Not tested by CI; owner validation required'
+          ) | Set-Content -LiteralPath (Join-Path $root BUILD-INFO.txt) -Encoding utf8
+          Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
+          Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
+          Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
+          @(
+            'Cotabby Windows release build'
+            'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
+            'Keep runtimes/win-x64 beside the executable. No .NET installation is required.'
+            'This build uses your existing Cotabby settings and model cache.'
+            'Test tabby-2-nano first, then tabby-2-plus when memory permits.'
+            'Try single-line and multi-line completion, the longest length preset, and a mid-line caret.'
+            'Open Settings > Performance. Wait at least two samples; unknown GPU fields show a dash.'
+            'Compare GPU readouts with Task Manager while generating suggestions; per-adapter behavior needs live proof.'
+            'Enable request tracking, generate a suggestion, verify a latency row, then Clear and restart.'
+            'Disable tracking and verify new requests add no rows. Confirm the toggle persists after restart.'
+            'Switch away from Performance and close Settings; GPU sampling must stop.'
+            'Credential protection: use dummy values only. Username, verification, card and password inputs should receive no suggestions.'
+            'Ordinary writing, email subjects and document-style email bodies should still work.'
+            'Browser accessibility metadata varies; this is not complete DOM/autofill parity.'
+            'Check C:\tmp\cotabby-live.log for Model ... loaded and Constrained decode.'
+            'Do not share the raw log: it can contain your typed text and local paths.'
+          ) | Set-Content -LiteralPath (Join-Path $root README-TEST.txt) -Encoding utf8
+
+          $records = @(Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+            [ordered]@{
+              path = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+              bytes = $_.Length
+              sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          })
+          ConvertTo-Json -InputObject $records -Depth 4 | Set-Content (Join-Path $root PACKAGE-MANIFEST.json) -Encoding utf8
+          Write-Output "RELEASE_TESTS_PASSED=$($counts.passed) SOURCE_COMMIT=$source VERSION=$version"
+
+      - name: ZIP, extract, and verify every packaged byte
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -Raw VERSION).Trim()
+          $zip = Join-Path $PWD "artifacts/Cotabby-win-x64-v$version.zip"
+          Compress-Archive -Path artifacts/Cotabby-win-x64/* -DestinationPath $zip
+          $extract = Join-Path $env:RUNNER_TEMP cotabby-release-proof
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract
+          $records = Get-Content -Raw (Join-Path $extract PACKAGE-MANIFEST.json) | ConvertFrom-Json
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          foreach ($record in $records) {
+            if (-not $seen.Add($record.path)) { throw 'Duplicate manifest member' }
+            $path = Join-Path $extract $record.path
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing member: $($record.path)" }
+            if ((Get-Item -LiteralPath $path).Length -ne $record.bytes -or
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $record.sha256) {
+              throw "Member hash/size mismatch: $($record.path)"
+            }
+          }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne $seen.Count + 1) { throw 'Unlisted package member' }
+          foreach ($required in @('Cotabby.exe', 'Cotabby.Core.dll', 'Cotabby.Inference.dll',
+              'Cotabby.runtimeconfig.json', 'BUILD-INFO.txt', 'README-TEST.txt',
+              'runtimes/win-x64/native/noavx/llama.dll', 'runtimes/win-x64/native/noavx/ggml.dll',
+              'runtimes/win-x64/native/noavx/ggml-base.dll', 'runtimes/win-x64/native/noavx/ggml-cpu.dll',
+              'runtimes/win-x64/native/vulkan/llama.dll', 'runtimes/win-x64/native/vulkan/ggml-vulkan.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $extract $required) -PathType Leaf)) { throw "Missing required file: $required" }
+          }
+          if (@($files | Where-Object { $_.Extension -in @('.gguf', '.log', '.env') }).Count -ne 0) {
+            throw 'Forbidden model/log/secret artifact'
+          }
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  Cotabby-win-x64-v$version.zip" | Set-Content "artifacts/Cotabby-win-x64-v$version.zip.sha256" -Encoding ascii
+          "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha" | Set-Content artifacts/release-facts.txt -Encoding ascii
+          Write-Output "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha"
+
+      - name: Write release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -Raw VERSION).Trim()
+          $sha = ((Get-Content -Raw artifacts/release-facts.txt) -replace '^.*ZIP_SHA256=', '').Trim()
+          $notes = New-Object System.Collections.Generic.List[string]
+          $notes.Add("Cotabby for Windows v$version")
+          $notes.Add('')
+          $notes.Add("Tagged build from commit ``$env:GITHUB_SHA``.")
+          $notes.Add('')
+          $capture = $false
+          foreach ($line in Get-Content CHANGELOG.md) {
+            if ($line -match '^##\s') {
+              $capture = $line -match "^##\s+$([regex]::Escape($version))(\s|$)"
+              if ($capture) { continue }
+            }
+            if ($capture) { $notes.Add($line) }
+          }
+          if ($notes.Count -le 3) { throw "No CHANGELOG section found for $version" }
+          $notes.Add('')
+          $notes.Add('### Assets')
+          $notes.Add('')
+          $notes.Add("- ``Cotabby-win-x64-v$version.zip`` — self-contained folder build. Extract into a new folder; do not flatten ``runtimes``.")
+          $notes.Add("- ``Cotabby-win-x64-v$version.zip.sha256`` — verified checksum of the ZIP above.")
+          $notes.Add('')
+          $notes.Add("SHA-256: ``$sha``")
+          $notes.Add('')
+          $notes.Add('### Verification')
+          $notes.Add('')
+          $notes.Add('- Windows CI on this commit runs the full test suite, the synthetic real-UI-Automation credential proof and a GPU counter/persistence smoke test.')
+          $notes.Add('- The published ZIP is extracted and every member is hashed against the packaged manifest before upload.')
+          $notes.Add('- Live model decoding, physical GPU readings, per-adapter behavior and browser/application credential coverage remain owner-verified.')
+          $notes.Add('- Inference stays local: no telemetry and no cloud completion. Do not share raw logs; they can contain typed text.')
+          $notes | Set-Content -LiteralPath artifacts/release-notes.md -Encoding utf8
+
+      - name: Upload release evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Cotabby-win-x64
-          path: artifacts/Cotabby-win-x64.zip
+          name: Cotabby-windows-release-evidence
+          path: artifacts/test-results
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          files: artifacts/Cotabby-win-x64.zip
+          name: Cotabby for Windows ${{ github.ref_name }}
+          body_path: artifacts/release-notes.md
+          files: |
+            artifacts/Cotabby-win-x64-v*.zip
+            artifacts/Cotabby-win-x64-v*.zip.sha256
+          fail_on_unmatched_files: true
