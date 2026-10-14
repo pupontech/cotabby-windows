@@ -53,23 +53,34 @@ A process guard alone does not prove same-process field identity or key delivery
 
 | Criterion | Current evidence |
 | --- | --- |
-| Inclusive 300 ms, one-shot pair, mismatch and clock regression | Four portable state tests pass |
-| Basic immediate first unit and second-tail acceptance | Coordinator unit test passes; real-host result pending |
-| Repeat and intervening-key rejection | Portable tests pass; real-hook proof pending |
-| No insertion into a different process | Regression observed RED then GREEN |
-| Legacy defaults and selection save/reload | Feature-specific persistence test pending |
-| Phrase mode and one active full-accept setting | Additional coverage pending |
-| Rapid queued Tabs preserve both intents without duplicates | Exact-diff review pending; existing stale-snapshot test proves only duplicate refusal |
-| Exact combined text with stale UIA | Pending; separate insertion-string assertions do not prove spacing |
-| Same-process focus changes, failed/delayed insertion, unowned Tab | Safety review and regression coverage pending |
-| Windows hook, UIA, packaged native layout and fixture readback | Windows CI pending |
-| Real model suggestions and physical-key gestures in owner apps | Owner validation pending |
+| Inclusive 300 ms, one-shot pair, mismatch and clock regression | Portable state tests pass (RED then GREEN) |
+| Immediate first unit, second-tail promotion, phrase mode | Coordinator tests pass with a mutable host-text fixture |
+| Repeat and intervening-key rejection | Portable tests pass; synthetic real-hook repeat case passes on Windows |
+| Rapid queued Tabs keep both intents exactly once, and a physical gap wider than the window stays two units | Portable tests pass; synthetic real-hook case passes on Windows |
+| Exact combined host text with a stale UIA snapshot | Portable test asserts the final host string; synthetic real-hook case passes on Windows |
+| Failed, throwing, delayed and disposed insertion never advances, arms or inserts the tail | Portable tests pass; one outcome is reported per captured key |
+| No insertion into a different process or a different control in the same process | Portable tests pass; synthetic real-hook cases pass on Windows |
+| Legacy defaults, existing choices, DoubleTap round-trip and explicit switch back | Portable settings tests pass against the real settings source |
+| Windows hook, UIA, packaged native layout and fixture text readback | Windows CI run 38552244230: 261 tests, 8/8 synthetic hook cases, credential UIA proof, native DLL load, 546-member byte-verified package |
+| Real model suggestions, physical-key gestures, real host apps | Owner validation pending |
+
+### Captured-key replay is deliberately refused
+
+A Tab (or the full-accept key) is eaten only when an accept is expected to happen. If that accept is
+then rejected - insertion refused, insertion threw, focus moved, field identity changed, the
+coordinator was disposed - the key is NOT replayed into the application, so that press is lost. The
+coordinator reports one outcome per captured key (`Committed`, `InsertionRejected`, `InsertionThrew`,
+`Invalidated`, `Blocked`, `CoordinatorDisposed`, `DispatchFailed`) and never sprays a synthetic key at
+an unknown target and never retries. A future replay path needs immutable raw key data, exact
+modifier state, the original foreground window and a hook-owned tagged injection marker checked
+immediately before dispatch; until that exists, refusal is the honest behaviour and must not be
+advertised as lossless. Synthetic proof also cannot establish physical key auto-repeat.
 
 ## Verified local commands
 
 Using .NET 9 SDK at the existing scratch toolchain:
 
-- `dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore`: **242 passed, 0 failed, 0 skipped**, independently rerun by the parent.
+- `dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore`: **261 passed, 0 failed, 0 skipped**, independently rerun by the parent.
 - Focused double-tap tests after the fix: **11 passed**, repeated three times by
   the writer. Before the fix, three tests hung in their manually queued test
   SynchronizationContext; uncaptured async continuations now allow the explicit
@@ -77,6 +88,8 @@ Using .NET 9 SDK at the existing scratch toolchain:
 - `dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release -p:EnableWindowsTargeting=true`:
   writer log records **0 warnings, 0 errors**.
 - Parent `git diff --check`: no diagnostics, exit 0.
+
+Windows CI also runs the real keyboard hook and UI Automation against WPF fixtures: 8/8 cases pass, covering double tap, repeat, unowned Tab, cross-process and same-process focus change, delayed dispatch and stale snapshots. That proof uses a fixture-directed insertion adapter and synthetic keys, so it is not a claim about physical keys or the production SendInput inserter.
 
 Linux unit tests and WPF cross-compilation are **not Windows execution proof**.
 No actual Windows hook, physical key, live model load or constrained decode has
