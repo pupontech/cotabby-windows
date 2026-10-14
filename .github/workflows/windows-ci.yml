@@ -64,6 +64,14 @@ jobs:
             throw "Credential UIA proof failed with exit code $code"
           }
 
+      - name: Verify double-tap intent and fixture text through real Windows hooks
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project tools/Cotabby.Tools.DoubleTapSmoke/Cotabby.Tools.DoubleTapSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw "Double-tap hook proof failed with exit code $LASTEXITCODE" }
+          Write-Output 'DOUBLETAP_HOOK_FIXTURE_PROOF=PASSED (fixture adapter; not production SendInputTextInserter or physical keys)'
+
       - name: Publish self-contained Windows x64 folder
         run: >-
           dotnet publish src/Cotabby.App/Cotabby.App.csproj

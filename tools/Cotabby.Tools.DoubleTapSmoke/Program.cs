@@ -224,11 +224,13 @@ internal static class Program
         rig.TabPress();
         rig.WaitForFirstInsertionStarted();
         using var dispatcher = rig.BlockDispatcher();
+        Thread.Sleep(350);
+        clock.Set(20.35);
         rig.TabPress();
         var downs = rig.EventsSince(cursor).Where(e => e.Kind == KeyKind.Tab && e.Down).ToArray();
         Require(downs.Length == 2 && downs.All(e => !e.Autorepeat && e.Suppressed), "delayed case did not queue two distinct accepted Tab-downs");
-        Require(downs[1].At - downs[0].At is > 0 and <= DoubleTapAcceptanceState.WindowSeconds,
-            "delayed case's physical Tab event gap was not within 300ms");
+        Require(downs[1].At - downs[0].At > DoubleTapAcceptanceState.WindowSeconds,
+            "delayed case's physical Tab event gap was not greater than 300ms");
         var queuedDelay = Stopwatch.StartNew();
         Thread.Sleep(350);
         queuedDelay.Stop();
