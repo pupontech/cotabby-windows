@@ -48,6 +48,12 @@ jobs:
       - name: Build Windows application
         run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
 
+      - name: Exercise actual Settings window and production text insertion
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tools/Cotabby.Tools.RegressionSmoke/Cotabby.Tools.RegressionSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw 'Production regression proof failed' }
+
       - name: Exercise Windows paired GPU counter calculator and safe adapter reads
         run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
 
