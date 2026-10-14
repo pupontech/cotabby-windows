@@ -758,7 +758,17 @@ public sealed class SuggestionCoordinatorDoubleTapTests
                     plan.Started.TrySetResult();
                     using var registration = ct.Register(() => plan.CancellationObserved.TrySetResult());
                     plan.Registered.TrySetResult();
-                    inserted = await plan.Result.Task.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        inserted = await plan.Result.Task.WaitAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Observe the cancellation from the throw itself: the token
+                        // callback races the registration window, the throw does not.
+                        plan.CancellationObserved.TrySetResult();
+                        throw;
+                    }
                 }
 
                 if (inserted)
