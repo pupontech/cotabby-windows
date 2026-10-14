@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- In-progress, global-only opt-in [double-tap Tab acceptance (#840)](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650). Default Backtick remains unchanged; selecting DoubleTap replaces the full-accept key choice. Portable tests pass; exact-diff safety review and Windows hook/runtime proof remain pending. See [scope and acceptance](docs/upstream-double-tap.md).
+
+### Fixed
+
+- Refuse suggestion insertion when the refreshed field belongs to another process, with a RED→GREEN regression. This does not establish same-process field identity.
+
 ## 0.3.0 — 2026-10-13
 
 ### Added

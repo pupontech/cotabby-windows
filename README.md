@@ -160,6 +160,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Fill-in-middle for mid-line carets | ✅ (Qwen3.5 models)       |
 | Word-by-word / phrase acceptance   | ✅ (`Tab`, mode in Shortcuts) |
 | Accept-whole key                   | ✅ (`` ` `` backtick default) |
+| Double-tap Tab ([upstream #840](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650)) | Unreleased global-only opt-in; 242 portable tests pass; safety review and Windows proof pending. [Scope and acceptance](docs/upstream-double-tap.md) |
 | Ghost text overlay (color/opacity, hint chip, theme-aware) | ✅ |
 | Settings window (sidebar: General / Engine & Model / Writing / Shortcuts / Apps / Advanced / Performance / About) | ✅ |
 | First-run welcome wizard (template cards) | ✅                 |
