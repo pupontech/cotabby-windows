@@ -361,6 +361,7 @@ internal static class FixtureWindow
         var editor = new TextBox
         {
             Text = "seed",
+            CaretIndex = 4,
             Width = 360,
             Height = 34,
             Margin = new Thickness(12),
