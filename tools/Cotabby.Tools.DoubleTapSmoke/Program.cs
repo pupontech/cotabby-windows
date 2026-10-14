@@ -64,7 +64,8 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                results.Add(new(test.Id, CaseStatus.Fail, "unexpected exception: " + ex.GetType().Name));
+                results.Add(new(test.Id, CaseStatus.Fail, "unexpected exception: " + ex.GetType().Name +
+                    (ex is EntryPointNotFoundException ? " — " + ex.Message : "")));
             }
         }
 
