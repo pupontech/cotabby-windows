@@ -23,4 +23,14 @@
     <ProjectReference Include="..\..\src\Cotabby.Inference\Cotabby.Inference.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\..\src\Cotabby.App\Settings\AppSettings.cs" Link="AppSettings.cs" />
+    <EmbeddedResource Include="..\..\src\Cotabby.App\UI\SettingsWindow.xaml">
+      <LogicalName>Cotabby.SettingsWindow.xaml</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\src\Cotabby.App\UI\WelcomeWindow.xaml">
+      <LogicalName>Cotabby.WelcomeWindow.xaml</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

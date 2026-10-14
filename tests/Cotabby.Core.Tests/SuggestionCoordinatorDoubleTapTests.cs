@@ -154,7 +154,120 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         await rig.Ui.WaitForPendingAtLeastAsync(pendingBefore + 2);
         rig.Ui.DrainAll();
 
+        await rig.WaitForOutcomesAsync(2);
         Assert.Equal(new[] { "world", " again tomorrow today" }, rig.Inserter.Inserted);
+        Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
+        Assert.False(rig.Overlay.IsVisible);
+        var outcomes = rig.Outcomes.ToArray();
+        Assert.Equal(2, outcomes.Length);
+        Assert.Equal(2, outcomes.Select(outcome => outcome.IntentSequence).Distinct().Count());
+        Assert.All(outcomes, outcome => Assert.Equal(AcceptanceIntentStatus.StateCommitted, outcome.Status));
+        Assert.All(outcomes, outcome => Assert.Equal(AcceptanceKeyDisposition.ConsumedBySuggestion, outcome.KeyDisposition));
+    }
+
+    [Fact]
+    public async Task DelayedFalseHeadDoesNotAdvanceOrArmAndQueuedTailIsNotInserted()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.Equal(new[] { "world" }, rig.Inserter.Attempts);
+
+        head.Release(false);
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+        Assert.Equal("world again tomorrow today", rig.Overlay.Text);
+        Assert.Equal("Hello ", rig.Focus.HostText);
+        Assert.Equal(new[] { "world" }, rig.Inserter.Attempts);
+        Assert.Equal(new[] { AcceptanceIntentStatus.InsertionRejected, AcceptanceIntentStatus.BlockedByEarlierFailure },
+            rig.Outcomes.Select(outcome => outcome.Status));
+        Assert.All(rig.Outcomes, outcome => Assert.Equal(AcceptanceKeyDisposition.ReplayRefusedIncompleteKeyMetadata, outcome.KeyDisposition));
+
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(3);
+        Assert.Equal(new[] { "world", "world" }, rig.Inserter.Attempts);
+        Assert.Equal("Hello world", rig.Focus.HostText);
+        Assert.Equal(" again tomorrow today", rig.Overlay.Text);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+    }
+
+    [Fact]
+    public async Task DelayedThrowingHeadDoesNotAdvanceOrArmAndQueuedTailIsNotInserted()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.Equal(new[] { "world" }, rig.Inserter.Attempts);
+
+        head.Throw(new InvalidOperationException("controlled insertion failure"));
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+        Assert.Equal("world again tomorrow today", rig.Overlay.Text);
+        Assert.Equal("Hello ", rig.Focus.HostText);
+        Assert.Equal(new[] { "world" }, rig.Inserter.Attempts);
+        Assert.Equal(new[] { AcceptanceIntentStatus.InsertionFaulted, AcceptanceIntentStatus.BlockedByEarlierFailure },
+            rig.Outcomes.Select(outcome => outcome.Status));
+        Assert.All(rig.Outcomes, outcome => Assert.Equal(AcceptanceKeyDisposition.ReplayRefusedIncompleteKeyMetadata, outcome.KeyDisposition));
+
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(3);
+        Assert.Equal(new[] { "world", "world" }, rig.Inserter.Attempts);
+        Assert.Equal("Hello world", rig.Focus.HostText);
+        Assert.Equal(" again tomorrow today", rig.Overlay.Text);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+    }
+
+    [Fact]
+    public async Task DisposalCancelsInFlightHeadAndNeverStartsQueuedTail()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+
+        await rig.Coordinator.DisposeAsync();
+        await head.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+
+        Assert.Equal(new[] { "world" }, rig.Inserter.Attempts);
+        Assert.Empty(rig.Inserter.Inserted);
+        Assert.All(rig.Outcomes, outcome => Assert.Equal(AcceptanceIntentStatus.CoordinatorDisposed, outcome.Status));
+        Assert.All(rig.Outcomes, outcome => Assert.Equal(AcceptanceKeyDisposition.ReplayRefusedIncompleteKeyMetadata, outcome.KeyDisposition));
+    }
+
+    [Fact]
+    public async Task GeometryOnlyAnchorRefreshDoesNotInvalidateConfirmedInsertion()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
+        rig.Clock.Now += 0.1;
+        var tail = rig.Inserter.DelayNext();
+        rig.Focus.SetCaretRect(new ScreenRect(200, 300, 1, 20));
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await tail.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.Ui.WaitForPendingAtLeastAsync(1);
+        rig.Ui.DrainAll();
+        tail.Release(true);
+        await tail.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+
         Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
         Assert.False(rig.Overlay.IsVisible);
     }
@@ -192,6 +305,8 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         HasNonShiftModifier = false,
         IsKeyDown = true,
         IsAutorepeat = isAutorepeat,
+        ForegroundProcessId = Environment.ProcessId + 100,
+        ForegroundWindowHandle = 1234,
     };
 
     private sealed class ManualClock
@@ -209,6 +324,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public SuggestionWorkController Work { get; } = new(TimeSpan.Zero);
         public TestSuggestionEngine Engine { get; } = new();
         public ManualClock Clock { get; } = new();
+        public ConcurrentQueue<AcceptanceIntentOutcome> Outcomes { get; } = new();
         public SuggestionCoordinator Coordinator { get; }
 
         private Rig(bool doubleTapEnabled)
@@ -228,6 +344,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             {
                 DoubleTapFullAcceptanceEnabled = doubleTapEnabled,
             };
+            Coordinator.AcceptanceIntentCompleted += Outcomes.Enqueue;
         }
 
         public static async Task<Rig> CreateAsync(bool doubleTapEnabled, bool showSuggestion = true)
@@ -271,6 +388,17 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             {
                 await Ui.WaitForPendingAtLeastAsync(1).WaitAsync(timeout.Token).ConfigureAwait(false);
                 Ui.DrainAll();
+            }
+            Ui.DrainAll();
+        }
+
+        public async Task WaitForOutcomesAsync(int count)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (Outcomes.Count < count)
+            {
+                Ui.DrainAll();
+                await Task.Delay(10, timeout.Token);
             }
             Ui.DrainAll();
         }
@@ -419,6 +547,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public void MakeCredentialField() => _field = _field with { IsCredentialField = true };
         public void MoveToAnotherProcess() => _field = _field with { ProcessId = _field.ProcessId + 1 };
         public void MoveToAnotherField() => _field = _field with { StableFieldIdentity = "other-field" };
+        public void SetCaretRect(ScreenRect rect) => _field = _field with { CaretRect = rect };
         public void ClearField() => _field = null!;
         public void ApplyInsertion(string text) => HostText += text;
     }
@@ -435,15 +564,67 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     private sealed class TestTextInserter : ITextInserter
     {
         private readonly TestFocusTracker _focus;
+        private readonly object _gate = new();
+        private readonly Queue<InsertGate> _plans = new();
+        private readonly List<string> _attempts = new();
+        private readonly List<string> _inserted = new();
 
         public TestTextInserter(TestFocusTracker focus) => _focus = focus;
 
-        public List<string> Inserted { get; } = new();
-        public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
+        public string[] Attempts { get { lock (_gate) return _attempts.ToArray(); } }
+        public string[] Inserted { get { lock (_gate) return _inserted.ToArray(); } }
+
+        public InsertGate DelayNext()
         {
-            Inserted.Add(text);
-            _focus.ApplyInsertion(text);
-            return Task.FromResult(true);
+            var plan = new InsertGate();
+            lock (_gate) _plans.Enqueue(plan);
+            return plan;
         }
+
+        public async Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
+        {
+            InsertGate? plan;
+            lock (_gate)
+            {
+                _attempts.Add(text);
+                plan = _plans.Count == 0 ? null : _plans.Dequeue();
+            }
+
+            try
+            {
+                bool inserted;
+                if (plan is null)
+                {
+                    inserted = true;
+                }
+                else
+                {
+                    plan.Started.TrySetResult();
+                    using var registration = ct.Register(() => plan.CancellationObserved.TrySetResult());
+                    inserted = await plan.Result.Task.WaitAsync(ct).ConfigureAwait(false);
+                }
+
+                if (inserted)
+                {
+                    lock (_gate) _inserted.Add(text);
+                    _focus.ApplyInsertion(text);
+                }
+                return inserted;
+            }
+            finally
+            {
+                plan?.Finished.TrySetResult();
+            }
+        }
+    }
+
+    private sealed class InsertGate
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Release(bool inserted) => Result.TrySetResult(inserted);
+        public void Throw(Exception exception) => Result.TrySetException(exception);
     }
 }

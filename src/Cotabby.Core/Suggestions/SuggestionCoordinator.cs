@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Cotabby.Core.Focus;
 using Cotabby.Core.Input;
@@ -50,17 +51,37 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         bool IsCredentialField,
         long Version);
 
-    private sealed record AcceptIntent(
-        PresentationSnapshot Presentation,
-        double EventTimeSeconds,
-        bool IsTabAccept,
-        bool IsAutorepeat,
-        bool Whole);
+    private sealed class AcceptIntent(
+        long sequence,
+        PresentationSnapshot presentation,
+        double eventTimeSeconds,
+        bool isTabAccept,
+        bool isAutorepeat,
+        bool whole,
+        KeyboardEvent capturedEvent)
+    {
+        private int _completed;
+
+        public long Sequence { get; } = sequence;
+        public PresentationSnapshot Presentation { get; } = presentation;
+        public double EventTimeSeconds { get; } = eventTimeSeconds;
+        public bool IsTabAccept { get; } = isTabAccept;
+        public bool IsAutorepeat { get; } = isAutorepeat;
+        public bool Whole { get; } = whole;
+        // Preserve all normalized metadata observed with this suppressed key. It
+        // intentionally is not treated as sufficient to synthesize a replay.
+        public KeyboardEvent CapturedEvent { get; } = capturedEvent;
+        public bool TryComplete() => Interlocked.Exchange(ref _completed, 1) == 0;
+    }
 
     private PresentationSnapshot? _presentation;
     private long _presentationVersion;
     private readonly Queue<AcceptIntent> _acceptanceQueue = new();
+    private readonly object _acceptanceGate = new();
+    private readonly ConcurrentDictionary<long, AcceptIntent> _outstandingAcceptanceIntents = new();
+    private readonly CancellationTokenSource _acceptanceLifetime = new();
     private bool _acceptanceQueueRunning;
+    private long _nextAcceptIntentSequence;
     private readonly DoubleTapAcceptanceState _doubleTapAcceptanceState = new();
     private readonly Func<double> _doubleTapUptimeProvider;
     private bool _doubleTapFullAcceptanceEnabled;
@@ -91,6 +112,12 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// <summary>Opt-in latency log behind the Performance pane, or null when the
     /// host does not wire one. Recording is a no-op while its tracking toggle is off.</summary>
     public PerformanceMetricsStore? PerformanceMetrics { get; set; }
+
+    /// <summary>
+    /// Raised exactly once for each key event captured by the acceptance path.
+    /// The payload contains no field text, request prefix, or field identity.
+    /// </summary>
+    public event Action<AcceptanceIntentOutcome>? AcceptanceIntentCompleted;
 
     /// <summary>Display name of the model currently answering, stamped onto each
     /// recorded entry. Set by the host when a model finishes loading.</summary>
@@ -191,6 +218,15 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        lock (_acceptanceGate)
+        {
+            DrainAcceptanceQueueLocked();
+        }
+        _acceptanceLifetime.Cancel();
+        foreach (var intent in _outstandingAcceptanceIntents.Values)
+        {
+            CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.CoordinatorDisposed);
+        }
         _inFlightRequestId = null;
         _generationInFlight = false;
         _inFlightPid = 0;
@@ -249,7 +285,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     private void OnKeyEvent(object? sender, KeyEventArgs args)
     {
-        if (!_enabled) return;
+        if (_disposed || !_enabled) return;
 
         // One acquire read gets one immutable set of presentation and ownership metadata.
         var presentation = Volatile.Read(ref _presentation);
@@ -278,10 +314,22 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         {
             double eventTimeSeconds = _doubleTapUptimeProvider();
             var intent = new AcceptIntent(
-                presentation!, eventTimeSeconds, isTabAccept, args.Event.IsAutorepeat, isAltAccept);
+                Interlocked.Increment(ref _nextAcceptIntentSequence),
+                presentation!, eventTimeSeconds, isTabAccept, args.Event.IsAutorepeat,
+                isAltAccept, args.Event);
+            _outstandingAcceptanceIntents.TryAdd(intent.Sequence, intent);
             args.Suppress = true;
-            _work.Cancel();
-            Post(() => EnqueueAcceptIntent(intent));
+            try
+            {
+                _work.Cancel();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Could not cancel prior suggestion work (type={ExceptionType}).", ex.GetType().Name);
+                CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.DispatchFailed);
+                return;
+            }
+            PostAcceptIntent(intent);
             return;
         }
 
@@ -614,42 +662,149 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         });
     }
 
+    private void PostAcceptIntent(AcceptIntent intent)
+    {
+        void EnqueueOrRefuse()
+        {
+            if (_disposed)
+            {
+                CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.CoordinatorDisposed);
+                return;
+            }
+            EnqueueAcceptIntent(intent);
+        }
+
+        if (_disposed)
+        {
+            CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.CoordinatorDisposed);
+            return;
+        }
+        if (SynchronizationContext.Current == _ui)
+        {
+            EnqueueOrRefuse();
+            return;
+        }
+
+        try
+        {
+            _ui.Post(_ => EnqueueOrRefuse(), null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not dispatch a captured accept intent (type={ExceptionType}).", ex.GetType().Name);
+            CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.DispatchFailed);
+        }
+    }
+
     private void EnqueueAcceptIntent(AcceptIntent intent)
     {
-        _acceptanceQueue.Enqueue(intent);
-        if (_acceptanceQueueRunning) return;
-        _acceptanceQueueRunning = true;
-        _ = ProcessAcceptanceQueueAsync().ContinueWith(LogFault, TaskScheduler.Default);
+        bool startProcessor = false;
+        bool disposed;
+        lock (_acceptanceGate)
+        {
+            disposed = _disposed;
+            if (!disposed)
+            {
+                _acceptanceQueue.Enqueue(intent);
+                if (!_acceptanceQueueRunning)
+                {
+                    _acceptanceQueueRunning = true;
+                    startProcessor = true;
+                }
+            }
+        }
+
+        if (disposed)
+        {
+            CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.CoordinatorDisposed);
+        }
+        else if (startProcessor)
+        {
+            _ = ProcessAcceptanceQueueAsync().ContinueWith(LogFault, TaskScheduler.Default);
+        }
     }
 
     private async Task ProcessAcceptanceQueueAsync()
     {
-        try
+        while (true)
         {
-            while (_acceptanceQueue.Count > 0 && !_disposed)
+            AcceptIntent? intent;
+            lock (_acceptanceGate)
             {
-                var intent = _acceptanceQueue.Dequeue();
-                if (await AcceptIntentAsync(intent)) continue;
-
-                int discarded = _acceptanceQueue.Count;
-                _acceptanceQueue.Clear();
-                if (discarded > 0)
+                if (_disposed || _acceptanceQueue.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "Discarded {Count} queued accept intents after the preceding insertion was not confirmed.",
-                        discarded);
+                    _acceptanceQueueRunning = false;
+                    return;
                 }
-                break;
+                intent = _acceptanceQueue.Dequeue();
             }
-        }
-        finally
-        {
-            _acceptanceQueueRunning = false;
+
+            AcceptanceIntentStatus status;
+            try
+            {
+                status = await AcceptIntentOnUiAsync(intent, _acceptanceLifetime.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Accept intent processing failed (type={ExceptionType}).", ex.GetType().Name);
+                status = AcceptanceIntentStatus.InsertionFaulted;
+            }
+
+            CompleteAcceptanceIntent(intent, status);
+            if (status == AcceptanceIntentStatus.StateCommitted) continue;
+
+            AcceptanceIntentStatus queuedStatus = _disposed
+                ? AcceptanceIntentStatus.CoordinatorDisposed
+                : AcceptanceIntentStatus.BlockedByEarlierFailure;
+            StopQueueAndCompletePending(queuedStatus);
+            return;
         }
     }
 
-    private async Task<bool> AcceptIntentAsync(AcceptIntent intent)
+    private async Task<AcceptanceIntentStatus> AcceptIntentOnUiAsync(
+        AcceptIntent intent,
+        CancellationToken cancellationToken)
     {
+        if (_disposed) return AcceptanceIntentStatus.CoordinatorDisposed;
+        if (SynchronizationContext.Current == _ui)
+        {
+            return await AcceptIntentAsync(intent, cancellationToken).ConfigureAwait(false);
+        }
+
+        var completion = new TaskCompletionSource<AcceptanceIntentStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _ui.Post(async _ =>
+            {
+                if (_disposed)
+                {
+                    completion.TrySetResult(AcceptanceIntentStatus.CoordinatorDisposed);
+                    return;
+                }
+                try
+                {
+                    completion.TrySetResult(await AcceptIntentAsync(intent, cancellationToken).ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("Accept intent dispatch failed (type={ExceptionType}).", ex.GetType().Name);
+                    completion.TrySetResult(AcceptanceIntentStatus.InsertionFaulted);
+                }
+            }, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not dispatch a captured accept intent (type={ExceptionType}).", ex.GetType().Name);
+            return AcceptanceIntentStatus.DispatchFailed;
+        }
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    private async Task<AcceptanceIntentStatus> AcceptIntentAsync(
+        AcceptIntent intent,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed) return AcceptanceIntentStatus.CoordinatorDisposed;
         var session = _session;
         var presentation = intent.Presentation;
         if (session is null
@@ -659,7 +814,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         {
             _doubleTapAcceptanceState.Reset();
             _logger.LogInformation("Accept intent no longer belongs to the presented request/field; not accepting replacement text.");
-            return false;
+            return AcceptanceIntentStatus.IntentInvalidated;
         }
 
         var field = _focus.Refresh();
@@ -677,7 +832,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 CancelSession("field ownership changed before insertion");
             }
             _logger.LogInformation("Accept intent rejected because live focus does not match its field identity.");
-            return false;
+            return AcceptanceIntentStatus.IntentInvalidated;
         }
 
         var sessionToken = new DoubleTapAcceptanceState.SessionToken(session.RequestId);
@@ -688,7 +843,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         }
         else
         {
-            // Preserve upstream semantics: a repeat clears the pending pair,
+            // Preserve upstream semantics: an autorepeat clears the pending pair,
             // then follows ordinary word acceptance without arming another pair.
             _doubleTapAcceptanceState.Reset();
         }
@@ -701,7 +856,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         {
             _doubleTapAcceptanceState.Reset();
             CancelSession("accepted text empty after trim");
-            return false;
+            return AcceptanceIntentStatus.IntentInvalidated;
         }
 
         string chunk = whole
@@ -718,28 +873,43 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         {
             if (insertion.Length > 0)
             {
-                bool inserted = await _inserter.InsertAsync(field, insertion, CancellationToken.None)
+                bool inserted = await _inserter.InsertAsync(field, insertion, cancellationToken)
                     .ConfigureAwait(false);
                 if (!inserted)
                 {
                     await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
                     _logger.LogWarning("Accept insertion returned false; session was not advanced or armed.");
-                    return false;
+                    return AcceptanceIntentStatus.InsertionRejected;
                 }
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
+            return _disposed
+                ? AcceptanceIntentStatus.CoordinatorDisposed
+                : AcceptanceIntentStatus.InsertionCancelled;
         }
         catch (Exception ex)
         {
             await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
-            _logger.LogWarning(ex, "Accept insertion threw; session was not advanced or armed.");
-            return false;
+            _logger.LogWarning("Accept insertion threw (type={ExceptionType}); session was not advanced or armed.", ex.GetType().Name);
+            return AcceptanceIntentStatus.InsertionFaulted;
+        }
+
+        if (cancellationToken.IsCancellationRequested || _disposed)
+        {
+            await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
+            return _disposed
+                ? AcceptanceIntentStatus.CoordinatorDisposed
+                : AcceptanceIntentStatus.InsertionCancelled;
         }
 
         bool committed = false;
         await PostAsync(() =>
         {
             if (_session is null
-                || !ReferenceEquals(_session, session)
+                || !IsSameAcceptanceBase(_session, session)
                 || _session.RequestId != presentation.RequestId
                 || !string.Equals(_session.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal))
             {
@@ -753,7 +923,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             }
             else
             {
-                _session = session with
+                _session = _session with
                 {
                     VisibleText = remaining,
                     ConsumedChars = session.ConsumedChars + chunk.Length,
@@ -769,12 +939,73 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             committed = true;
         }).ConfigureAwait(false);
 
-        if (committed)
+        if (!committed)
         {
-            _ = RefreshAfterAcceptAsync(session.RequestId, exhausted)
-                .ContinueWith(LogFault, TaskScheduler.Default);
+            return _disposed
+                ? AcceptanceIntentStatus.CoordinatorDisposed
+                : AcceptanceIntentStatus.IntentInvalidated;
         }
-        return committed;
+
+        _ = RefreshAfterAcceptAsync(session.RequestId, exhausted)
+            .ContinueWith(LogFault, TaskScheduler.Default);
+        return AcceptanceIntentStatus.StateCommitted;
+    }
+
+    private static bool IsSameAcceptanceBase(SuggestionSession current, SuggestionSession expected) =>
+        current.RequestId == expected.RequestId
+        && current.ConsumedChars == expected.ConsumedChars
+        && string.Equals(current.VisibleText, expected.VisibleText, StringComparison.Ordinal)
+        && string.Equals(current.KnownPrecedingText, expected.KnownPrecedingText, StringComparison.Ordinal)
+        && string.Equals(current.StableFieldIdentity, expected.StableFieldIdentity, StringComparison.Ordinal);
+
+    private List<AcceptIntent> DrainAcceptanceQueueLocked()
+    {
+        var intents = new List<AcceptIntent>(_acceptanceQueue.Count);
+        while (_acceptanceQueue.Count > 0) intents.Add(_acceptanceQueue.Dequeue());
+        return intents;
+    }
+
+    private void CompletePendingAcceptanceIntents(AcceptanceIntentStatus status)
+    {
+        List<AcceptIntent> pending;
+        lock (_acceptanceGate) pending = DrainAcceptanceQueueLocked();
+        foreach (var intent in pending) CompleteAcceptanceIntent(intent, status);
+    }
+
+    private void StopQueueAndCompletePending(AcceptanceIntentStatus status)
+    {
+        List<AcceptIntent> pending;
+        lock (_acceptanceGate)
+        {
+            pending = DrainAcceptanceQueueLocked();
+            _acceptanceQueueRunning = false;
+        }
+        foreach (var intent in pending) CompleteAcceptanceIntent(intent, status);
+    }
+
+    private void CompleteAcceptanceIntent(AcceptIntent intent, AcceptanceIntentStatus status)
+    {
+        if (!intent.TryComplete()) return;
+        _outstandingAcceptanceIntents.TryRemove(intent.Sequence, out _);
+
+        var keyDisposition = status == AcceptanceIntentStatus.StateCommitted
+            ? AcceptanceKeyDisposition.ConsumedBySuggestion
+            : intent.CapturedEvent.ForegroundProcessId == 0
+                || intent.CapturedEvent.ForegroundWindowHandle == 0
+                    ? AcceptanceKeyDisposition.ReplayRefusedUnknownForeground
+                    : AcceptanceKeyDisposition.ReplayRefusedIncompleteKeyMetadata;
+        var outcome = new AcceptanceIntentOutcome(intent.Sequence, status, keyDisposition);
+        var handlers = AcceptanceIntentCompleted;
+        if (handlers is null) return;
+
+        foreach (Action<AcceptanceIntentOutcome> handler in handlers.GetInvocationList())
+        {
+            try { handler(outcome); }
+            catch (Exception ex)
+            {
+                _logger.LogError("Acceptance disposition observer failed (type={ExceptionType}).", ex.GetType().Name);
+            }
+        }
     }
 
     private async Task RefreshAfterAcceptAsync(string requestId, bool exhausted)
@@ -804,6 +1035,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void CancelSession(string reason)
     {
         _doubleTapAcceptanceState.Reset();
+        CompletePendingAcceptanceIntents(AcceptanceIntentStatus.IntentInvalidated);
         if (_session is null && !_generationInFlight) return;
         _logger.LogInformation("Cancel session ({Reason}).", reason);
         _session = null;
