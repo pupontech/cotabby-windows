@@ -317,7 +317,7 @@ internal static class Program
         rig.WaitForInsertions(2);
 
         rig.AssertInsertionChunks([" alpha", " beta gamma delta"]);
-        Require(BaseText + string.Concat(rig.InsertedTexts) == "seedx alpha beta gamma delta",
+        Require(fixture.ReadState().Text == "seedx alpha beta gamma delta",
             "Shift+Tab disturbed the pending pair or duplicated text");
     }
 
