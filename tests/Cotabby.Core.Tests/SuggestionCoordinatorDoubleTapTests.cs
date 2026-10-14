@@ -5,7 +5,7 @@ using Cotabby.Core.Input;
 using Cotabby.Core.Insertion;
 using Cotabby.Core.Overlay;
 using Cotabby.Core.Suggestions;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Cotabby.Core.Tests;
@@ -298,6 +298,107 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         Assert.Empty(rig.Inserter.Inserted);
     }
 
+    [Fact]
+    public async Task ReconcilerConsumedKeyDuringHeldInsertReanchorsInsteadOfReportingRefusal()
+    {
+        // Double-tap promotion stays off so the second press is an ordinary word
+        // accept and the assertions isolate the re-anchored remainder.
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: false);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // A reconciler-consumed key moves the base text and the consumed prefix
+        // while the insertion is still held in the inserter.
+        Assert.False(rig.Hook.Emit(Character('w')));
+
+        head.Release(true);
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(1);
+
+        var landed = rig.Outcomes.Single();
+        Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
+        Assert.Equal(AcceptanceIntentStatus.InsertedNotCommitted, landed.Status);
+        Assert.Equal(AcceptanceKeyDisposition.ConsumedBySuggestion, landed.KeyDisposition);
+
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(2);
+
+        Assert.Equal(new[] { "world", " again" }, rig.Inserter.Inserted);
+        Assert.Equal(" tomorrow today", rig.Overlay.Text);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+    }
+
+    [Fact]
+    public async Task QueueProcessorFaultLeavesQueueDrainableAndProducesOutcomes()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: false);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Queue a second intent behind the in-flight head. It is posted to the UI
+        // context, so drain once to enqueue it (the processor is busy on the head).
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab(), useUiContext: false));
+        rig.Ui.DrainAll();
+
+        // The head's insertion is about to land and its commit post will call
+        // overlay.Update, which throws; the faulting logger then turns the
+        // processor's own error log into a second throw that escapes the loop.
+        rig.Overlay.ThrowOnUpdate = true;
+        rig.Logger.ThrowOn = message => message.Contains("Accept intent processing failed");
+
+        head.Release(true);
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+
+        // The insertion landed, but the commit post faulted: both the in-flight
+        // head and the still-queued tail are completed with a fault status instead
+        // of being dropped.
+        Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
+        Assert.Equal(new[]
+        {
+            AcceptanceIntentStatus.QueueFaulted,
+            AcceptanceIntentStatus.QueueFaulted,
+        }, rig.Outcomes.Select(outcome => outcome.Status));
+        Assert.Equal(2, rig.Outcomes.Select(outcome => outcome.IntentSequence).Distinct().Count());
+
+        // The queue must be recoverable: a later Tab is accepted again.
+        rig.Overlay.ThrowOnUpdate = false;
+        rig.Logger.ThrowOn = null;
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(3);
+
+        Assert.Equal(new[] { "world", " again" }, rig.Inserter.Inserted);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+    }
+
+    [Fact]
+    public async Task DisposalCompletesDrainedQueuedIntentsExactlyOnce()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: false);
+        var head = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+
+        await rig.Coordinator.DisposeAsync();
+        await head.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(2);
+
+        var outcomes = rig.Outcomes.ToArray();
+        Assert.Equal(2, outcomes.Length);
+        Assert.Equal(2, outcomes.Select(outcome => outcome.IntentSequence).Distinct().Count());
+        Assert.All(outcomes, outcome => Assert.Equal(AcceptanceIntentStatus.CoordinatorDisposed, outcome.Status));
+    }
+
     private static KeyboardEvent Tab(bool isAutorepeat = false) => new()
     {
         Kind = KeyKind.Tab,
@@ -309,9 +410,50 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         ForegroundWindowHandle = 1234,
     };
 
+    private static KeyboardEvent Character(char value) => new()
+    {
+        Kind = KeyKind.Character,
+        Character = value,
+        HasNonShiftModifier = false,
+        IsKeyDown = true,
+        ForegroundProcessId = Environment.ProcessId + 100,
+        ForegroundWindowHandle = 1234,
+    };
+
     private sealed class ManualClock
     {
         public double Now { get; set; } = 100;
+    }
+
+    /// <summary>Logger that forwards every entry and can be armed to throw on a
+    /// chosen message, so a test can drive a fault out of the acceptance queue
+    /// processor's own error logging.</summary>
+    private sealed class FaultingLogger : ILogger<SuggestionCoordinator>
+    {
+        private Func<string, bool>? _throwOn;
+
+        public Func<string, bool>? ThrowOn
+        {
+            get => _throwOn;
+            set => _throwOn = value;
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (_throwOn is { } predicate && predicate(formatter(state, exception)))
+            {
+                throw new InvalidOperationException("controlled logger failure");
+            }
+        }
     }
 
     private sealed class Rig : IAsyncDisposable
@@ -325,6 +467,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public TestSuggestionEngine Engine { get; } = new();
         public ManualClock Clock { get; } = new();
         public ConcurrentQueue<AcceptanceIntentOutcome> Outcomes { get; } = new();
+        public FaultingLogger Logger { get; } = new();
         public SuggestionCoordinator Coordinator { get; }
 
         private Rig(bool doubleTapEnabled)
@@ -338,7 +481,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
                 Overlay,
                 Inserter,
                 Work,
-                NullLogger<SuggestionCoordinator>.Instance,
+                Logger,
                 Ui,
                 doubleTapUptimeProvider: () => Clock.Now)
             {
@@ -556,8 +699,20 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     {
         public string? Text { get; private set; }
         public bool IsVisible => Text is not null;
-        public void Show(string text, ScreenRect anchor) => Text = text;
-        public void Update(string text) => Text = text;
+        /// <summary>When set, the next Update() call (used by the commit post to
+        /// reflect the remaining tail) throws, to drive a fault through the
+        /// acceptance queue processor.</summary>
+        public bool ThrowOnUpdate { get; set; }
+        public void Show(string text, ScreenRect anchor)
+        {
+            if (ThrowOnUpdate) throw new InvalidOperationException("controlled overlay failure");
+            Text = text;
+        }
+        public void Update(string text)
+        {
+            if (ThrowOnUpdate) throw new InvalidOperationException("controlled overlay failure");
+            Text = text;
+        }
         public void Hide() => Text = null;
     }
 
