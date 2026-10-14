@@ -235,6 +235,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
         Assert.True(rig.Hook.Emit(Tab()));
         await head.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await head.Registered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         rig.Clock.Now += 0.1;
         Assert.True(rig.Hook.Emit(Tab()));
 
@@ -756,6 +757,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
                 {
                     plan.Started.TrySetResult();
                     using var registration = ct.Register(() => plan.CancellationObserved.TrySetResult());
+                    plan.Registered.TrySetResult();
                     inserted = await plan.Result.Task.WaitAsync(ct).ConfigureAwait(false);
                 }
 
@@ -776,6 +778,13 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     private sealed class InsertGate
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>
+        /// Set once the cancellation registration is actually installed. Without
+        /// this the disposal test races the window between "insert started" and
+        /// "cancel callback wired", and a cancellation delivered inside that
+        /// window is never observed even though the insert itself was cancelled.
+        /// </summary>
+        public TaskCompletionSource Registered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
