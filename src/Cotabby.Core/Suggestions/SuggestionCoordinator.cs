@@ -62,6 +62,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// happen on the UI thread; the hook thread does a release-acquire read.
     /// </summary>
     private string? _displayedTextSnapshot;
+    private string? _sessionRequestIdSnapshot;
+    private long _sessionPresentationVersion;
+    private readonly DoubleTapAcceptanceState _doubleTapAcceptanceState = new();
+    private readonly Func<double> _doubleTapUptimeProvider;
+    private bool _doubleTapFullAcceptanceEnabled;
 
     public SuggestionCoordinator(
         IKeyboardHook hook,
@@ -71,7 +76,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         ITextInserter inserter,
         SuggestionWorkController work,
         ILogger<SuggestionCoordinator> logger,
-        SynchronizationContext ui)
+        SynchronizationContext ui,
+        Func<double>? doubleTapUptimeProvider = null)
     {
         _hook = hook;
         _focus = focus;
@@ -81,6 +87,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _work = work;
         _logger = logger;
         _ui = ui;
+        _doubleTapUptimeProvider = doubleTapUptimeProvider
+            ?? (() => (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency);
     }
 
     /// <summary>Opt-in latency log behind the Performance pane, or null when the
@@ -147,6 +155,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// </summary>
     public string AcceptanceGranularity { get; set; } = "word";
 
+    /// <summary>
+    /// Opt-in: a second distinct Tab within the upstream window accepts the
+    /// remaining text from the same suggestion. Setting this (including while
+    /// already enabled) retires any pending first press.
+    /// </summary>
+    public bool DoubleTapFullAcceptanceEnabled
+    {
+        get => _doubleTapFullAcceptanceEnabled;
+        set
+        {
+            _doubleTapFullAcceptanceEnabled = value;
+            _doubleTapAcceptanceState.Reset();
+        }
+    }
+
     /// <summary>When false, trailing punctuation is left as its own chunk on
     /// word accepts. Mirrors macOS "Accept Punctuation With Word".</summary>
     public bool AcceptPunctuationWithWord { get; set; } = true;
@@ -174,8 +197,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _inFlightRequestId = null;
         _generationInFlight = false;
         _inFlightPid = 0;
-        Volatile.Write(ref _hasVisibleSession, 0);
-        Volatile.Write(ref _displayedTextSnapshot, null);
+        _doubleTapAcceptanceState.Reset();
+        PublishSessionSnapshot(null);
         void ClearDisposedPresentation()
         {
             _session = null;
@@ -195,6 +218,10 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     {
         Post(() =>
         {
+            // Even a focus transition within one process ends the user's
+            // physical double-tap sequence.
+            _doubleTapAcceptanceState.Reset();
+
             // Compare host process, not AutomationElement reference: UIA returns
             // a fresh AutomationElement instance on every focus event even when
             // focus stayed on the same conceptual field (Monaco/Electron in
@@ -247,27 +274,56 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             && char.ToLowerInvariant(args.Event.Character) == char.ToLowerInvariant(alt);
         if (hasSession && (isTabAccept || isAltAccept))
         {
+            long snapshotVersion = Volatile.Read(ref _sessionPresentationVersion);
+            string? requestId = Volatile.Read(ref _sessionRequestIdSnapshot);
+            string? textToInsert = Volatile.Read(ref _displayedTextSnapshot);
+            if (requestId is null || string.IsNullOrEmpty(textToInsert)
+                || snapshotVersion != Volatile.Read(ref _sessionPresentationVersion))
+            {
+                // The visible-session flag raced a presentation change. Pass
+                // this key through rather than accepting a stale snapshot.
+                Post(() => _doubleTapAcceptanceState.Reset());
+                return;
+            }
+
             args.Suppress = true;
             // Snapshot the displayed text right now, on the hook thread. Any
             // chunk that streams in between this point and AcceptAsync running
             // would otherwise mutate _session.VisibleText and cause us to
             // insert something the user didn't accept. Stop the engine
             // immediately for the same reason.
-            string textToInsert = Volatile.Read(ref _displayedTextSnapshot) ?? string.Empty;
             bool whole = isAltAccept;
             _work.Cancel();
-            _logger.LogInformation(
-                "Accept fast-path (whole={Whole}): snapshot len={Len} text=\"{Text}\"",
-                whole, textToInsert.Length, EscapeFull(textToInsert));
-            Post(() => AcceptAsync(textToInsert, whole).ContinueWith(LogFault, TaskScheduler.Default));
+            _logger.LogInformation("Accept fast-path (whole={Whole}): snapshot len={Len}.",
+                whole, textToInsert.Length);
+            Post(() => AcceptAsync(
+                textToInsert,
+                whole,
+                requestId,
+                snapshotVersion,
+                isTabAccept,
+                args.Event.IsAutorepeat).ContinueWith(LogFault, TaskScheduler.Default));
             return;
         }
 
-        Post(() => HandleEvent(args.Event));
+        bool unownedTabPress = isTabAccept && !hasSession;
+        Post(() =>
+        {
+            if (args.Event.IsKeyDown && (args.Event.Kind != KeyKind.Tab || unownedTabPress))
+            {
+                _doubleTapAcceptanceState.Reset();
+            }
+            if (!unownedTabPress) HandleEvent(args.Event);
+        });
     }
 
     private void HandleEvent(KeyboardEvent ev)
     {
+        if (ev.IsKeyDown && (ev.Kind != KeyKind.Tab || _session is null))
+        {
+            _doubleTapAcceptanceState.Reset();
+        }
+
         if (_session is not null)
         {
             var result = SuggestionSessionReconciler.Apply(_session, ev);
@@ -283,16 +339,19 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     // even though we missed the fast-path snapshot.
                     {
                         string acceptText = _displayedTextSnapshot ?? _session.VisibleText;
-                        AcceptAsync(acceptText, whole: false).ContinueWith(LogFault, TaskScheduler.Default);
+                        AcceptAsync(
+                            acceptText,
+                            whole: false,
+                            _session.RequestId,
+                            _sessionPresentationVersion,
+                            isTabAccept: true,
+                            ev.IsAutorepeat).ContinueWith(LogFault, TaskScheduler.Default);
                     }
                     return;
                 case SuggestionSessionReconciler.Outcome.AdvanceVisible when result.Next is { } next:
                     _session = next;
-                    if (next.VisibleText.Length == 0)
-                    {
-                        Volatile.Write(ref _hasVisibleSession, 0);
-                    }
-                    Volatile.Write(ref _displayedTextSnapshot, next.VisibleText);
+                    PublishSessionSnapshot(next);
+                    if (next.VisibleText.Length == 0) _doubleTapAcceptanceState.Reset();
                     _overlay.Update(next.VisibleText);
                     if (next.VisibleText.Length == 0 && next.IsComplete)
                     {
@@ -516,8 +575,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             AnchorRect = liveAnchor,
                         };
                         _sessionPid = livePid;
-                        Volatile.Write(ref _hasVisibleSession, 1);
-                        Volatile.Write(ref _displayedTextSnapshot, accumulated);
+                        _doubleTapAcceptanceState.Reset();
+                        PublishSessionSnapshot(_session);
                         _overlay.Show(accumulated, liveAnchor);
                         overlayShown = true;
                         requestPresented = true;
@@ -533,7 +592,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             VisibleText = accumulated,
                             IsComplete = chunk.IsFinal,
                         };
-                        Volatile.Write(ref _displayedTextSnapshot, accumulated);
+                        PublishSessionSnapshot(_session);
                         if (overlayShown) _overlay.Update(accumulated);
                         else { _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
                         requestPresented = true;
@@ -578,20 +637,43 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         });
     }
 
-    private async Task AcceptAsync(string textToInsert, bool whole)
+    private async Task AcceptAsync(
+        string textToInsert,
+        bool whole,
+        string expectedRequestId,
+        long expectedPresentationVersion,
+        bool isTabAccept,
+        bool isAutorepeat)
     {
         var session = _session;
-        if (session is null)
+        if (session is null
+            || session.RequestId != expectedRequestId
+            || Volatile.Read(ref _sessionPresentationVersion) != expectedPresentationVersion
+            || !string.Equals(session.VisibleText, textToInsert, StringComparison.Ordinal))
         {
-            _logger.LogInformation("AcceptAsync: session null, nothing to insert.");
+            _doubleTapAcceptanceState.Reset();
             return;
         }
         if (string.IsNullOrEmpty(textToInsert))
         {
-            _logger.LogInformation("AcceptAsync: snapshot empty (req={ReqId}), skip insert.",
-                session.RequestId);
+            _doubleTapAcceptanceState.Reset();
             return;
         }
+
+        var sessionToken = new DoubleTapAcceptanceState.SessionToken(session.RequestId);
+        double acceptedAtSeconds = 0;
+        bool promotedByDoubleTap = false;
+        if (isTabAccept && DoubleTapFullAcceptanceEnabled && !isAutorepeat)
+        {
+            acceptedAtSeconds = _doubleTapUptimeProvider();
+            promotedByDoubleTap = _doubleTapAcceptanceState.ConsumeDoubleTap(sessionToken, acceptedAtSeconds);
+        }
+        else
+        {
+            _doubleTapAcceptanceState.Reset();
+        }
+        whole |= promotedByDoubleTap;
+        bool armDoubleTap = isTabAccept && DoubleTapFullAcceptanceEnabled && !isAutorepeat && !whole;
 
         var field = _focus.Refresh();
         if (field is null)
@@ -601,12 +683,20 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             return;
         }
 
+        if (field.ProcessId != _sessionPid)
+        {
+            _logger.LogInformation("AcceptAsync: focused process changed since suggestion, cancel.");
+            CancelSession("process changed before accept");
+            return;
+        }
+
         // Typing into a sign-in/verification field is the same violation as
         // suggesting in one. Focus can move inside a single process without
         // cancelling the session (cancellation is pid-based), so re-check the
         // live field here rather than trusting the trigger-time decision.
         if (field.IsCredentialField)
         {
+            _doubleTapAcceptanceState.Reset();
             _logger.LogInformation(
                 "AcceptAsync: focused field is a sign-in/verification field, skip insert.");
             CancelSession("credential field");
@@ -655,8 +745,12 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 VisibleText = remaining,
                 ConsumedChars = session.ConsumedChars + chunk.Length,
             };
-            Volatile.Write(ref _displayedTextSnapshot, remaining);
+            PublishSessionSnapshot(_session);
             _overlay.Update(remaining);
+            if (armDoubleTap)
+            {
+                _doubleTapAcceptanceState.RecordWordAccept(sessionToken, acceptedAtSeconds);
+            }
         }
 
         try
@@ -665,6 +759,15 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             {
                 var ok = await _inserter.InsertAsync(field, insertion, CancellationToken.None).ConfigureAwait(false);
                 _logger.LogInformation("AcceptAsync: inserter returned ok={Ok}", ok);
+                if (!ok)
+                {
+                    Post(() =>
+                    {
+                        _doubleTapAcceptanceState.Reset();
+                        if (_session?.RequestId == session.RequestId) CancelSession("insertion failed");
+                    });
+                    return;
+                }
             }
 
             // Give the host ~60ms to publish the inserted text back into UIA,
@@ -694,11 +797,17 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Insertion threw.");
+            Post(() =>
+            {
+                _doubleTapAcceptanceState.Reset();
+                if (_session?.RequestId == session.RequestId) CancelSession("insertion failed");
+            });
         }
     }
 
     private void CancelSession(string reason)
     {
+        _doubleTapAcceptanceState.Reset();
         if (_session is null && !_generationInFlight) return;
         _logger.LogInformation("Cancel session ({Reason}).", reason);
         _session = null;
@@ -706,10 +815,23 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _generationInFlight = false;
         _inFlightPid = 0;
         _inFlightRequestId = null;
-        Volatile.Write(ref _hasVisibleSession, 0);
-        Volatile.Write(ref _displayedTextSnapshot, null);
+        PublishSessionSnapshot(null);
         _overlay.Hide();
         _work.Cancel();
+    }
+
+    /// <summary>
+    /// Publish one coherent, hook-thread-readable presentation snapshot. The
+    /// version lets queued accepts prove the overlay has not advanced since the
+    /// key was pressed, preventing a stale Tab callback from inserting twice.
+    /// </summary>
+    private void PublishSessionSnapshot(SuggestionSession? session)
+    {
+        Volatile.Write(ref _sessionRequestIdSnapshot, session?.RequestId);
+        Volatile.Write(ref _displayedTextSnapshot, session?.VisibleText);
+        Interlocked.Increment(ref _sessionPresentationVersion);
+        Volatile.Write(ref _hasVisibleSession,
+            session is not null && session.VisibleText.Length > 0 ? 1 : 0);
     }
 
     private static string Preview(string s) => s.Length <= 40 ? s : s[..40] + "…";

@@ -18,6 +18,9 @@ public sealed record KeyboardEvent
 
     /// <summary>True on key down, false on key up.</summary>
     public required bool IsKeyDown { get; init; }
+
+    /// <summary>True when the platform hook identified this key-down as auto-repeat.</summary>
+    public bool IsAutorepeat { get; init; }
 }
 
 public enum KeyKind

@@ -62,8 +62,9 @@ public sealed class AppSettings
     /// only for Tab). Other values are recorded but logged-and-ignored.</summary>
     public string AcceptWordKey { get; set; } = "Tab";
 
-    /// <summary>Accept-whole-suggestion key. Backtick mirrors the macOS
-    /// default; it only fires while a suggestion is visible.</summary>
+    /// <summary>Accept-whole-suggestion choice: Backtick (the backward-compatible
+    /// default), Tilde, Backslash, None, or opt-in DoubleTap (two distinct Tab
+    /// presses). It only fires while a suggestion is visible.</summary>
     public string AcceptSuggestionKey { get; set; } = "Backtick";
 
     /// <summary>Global enable toggle hotkey. Default unbound.</summary>

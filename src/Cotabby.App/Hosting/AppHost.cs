@@ -140,6 +140,8 @@ public sealed class AppHost : IAsyncDisposable
         Coordinator.MaxTokensMultiLine = multi;
         Coordinator.AllowMultiLineSuggestions = Settings.AllowMultiLine;
         Coordinator.AlternateAcceptKey = ParseAlternateAcceptKey(Settings.AcceptSuggestionKey);
+        Coordinator.DoubleTapFullAcceptanceEnabled = string.Equals(
+            Settings.AcceptSuggestionKey, "DoubleTap", StringComparison.OrdinalIgnoreCase);
         Coordinator.AcceptanceGranularity = Settings.AcceptanceMode == "phrase" ? "phrase" : "word";
         Coordinator.AcceptPunctuationWithWord = Settings.AcceptPunctuationWithWord;
         Coordinator.UserName = Settings.UserName;

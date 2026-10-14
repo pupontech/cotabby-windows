@@ -46,6 +46,10 @@ public sealed class KeyboardHook : IKeyboardHook
     private LowLevelKeyboardProc? _proc; // pinned by holding the delegate ref
     private bool _disposed;
     private volatile bool _running;
+    // WH_KEYBOARD_LL does not expose an auto-repeat bit. Repeated key-downs
+    // arrive before the matching key-up, so track Tab's physical down state on
+    // the hook thread and clear it when that key is released.
+    private bool _tabKeyDown;
 
     // Keyboard state buffer reused across ToUnicodeEx calls. The hook fires from
     // a single thread (the message-pump thread) so we don't need locking, but
@@ -63,6 +67,7 @@ public sealed class KeyboardHook : IKeyboardHook
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_running) return;
             _running = true;
+            _tabKeyDown = false;
 
             var started = new ManualResetEventSlim(false);
             Exception? startError = null;
@@ -133,6 +138,7 @@ public sealed class KeyboardHook : IKeyboardHook
             _thread?.Join(TimeSpan.FromSeconds(2));
             _thread = null;
             _threadId = 0;
+            _tabKeyDown = false;
             _logger.LogInformation("Keyboard hook removed.");
         }
     }
@@ -180,6 +186,11 @@ public sealed class KeyboardHook : IKeyboardHook
             }
 
             var (kind, ch) = Classify(data.vkCode, data.scanCode);
+            bool isAutorepeat = kind == KeyKind.Tab && isDown && _tabKeyDown;
+            if (kind == KeyKind.Tab)
+            {
+                _tabKeyDown = isDown;
+            }
             bool nonShiftMod = (GetKeyState(VK_CONTROL) & 0x8000) != 0
                 || (GetKeyState(VK_MENU) & 0x8000) != 0
                 || (GetKeyState(VK_LWIN) & 0x8000) != 0
@@ -191,6 +202,7 @@ public sealed class KeyboardHook : IKeyboardHook
                 Character = ch,
                 HasNonShiftModifier = nonShiftMod,
                 IsKeyDown = isDown,
+                IsAutorepeat = isAutorepeat,
             };
 
             var args = new KeyEventArgs(evt);
