@@ -14,6 +14,9 @@ public sealed record FocusedField
     /// <summary>Opaque, platform-specific element identity (UIA cache request, AX ref, …).</summary>
     public required object ElementHandle { get; init; }
 
+    /// <summary>Stable cross-snapshot identity for this field, or null when the platform cannot prove one.</summary>
+    public string? StableFieldIdentity { get; init; }
+
     /// <summary>Process id of the host app. Used for app-specific behavior toggles.</summary>
     public required int ProcessId { get; init; }
 

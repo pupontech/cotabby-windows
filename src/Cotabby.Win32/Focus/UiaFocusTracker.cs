@@ -33,7 +33,7 @@ public sealed class UiaFocusTracker : IFocusTracker
 
     public UiaFocusTracker(ILogger<UiaFocusTracker> logger) => _logger = logger;
 
-    public FocusedField? Current => _fakeField ?? _current;
+    public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
 
@@ -149,6 +149,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         try
         {
             var info = element.Current;
+            string? stableFieldIdentity = StableFieldIdentity(element);
             string? automationId = SafeRead(() => info.AutomationId);
             string? name = SafeRead(() => info.Name);
             string? helpText = SafeRead(() => info.HelpText);
@@ -165,7 +166,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             bool isPassword = SafeRead(() => info.IsPassword);
             if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
-                snapshot = BlockedSnapshot(element, info, isPassword);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }
 
@@ -182,7 +183,7 @@ public sealed class UiaFocusTracker : IFocusTracker
                     "Sign-in/verification field left alone (host={Host}, control={Control}). " +
                     "No text, metadata value or request leaves this read.",
                     TryGetProcessName(info.ProcessId), controlType);
-                snapshot = BlockedSnapshot(element, info, isPassword);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }
 
@@ -192,6 +193,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             snapshot = new FocusedField
             {
                 ElementHandle = element,
+                StableFieldIdentity = stableFieldIdentity,
                 ProcessId = info.ProcessId,
                 ProcessName = TryGetProcessName(info.ProcessId),
                 Text = text,
@@ -219,12 +221,16 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// recognized as a sign-in/verification input.
     /// </summary>
     private FocusedField BlockedSnapshot(
-        AutomationElement element, AutomationElement.AutomationElementInformation info, bool isPassword)
+        AutomationElement element,
+        AutomationElement.AutomationElementInformation info,
+        bool isPassword,
+        string? stableFieldIdentity)
     {
         var fieldRect = ToScreenRect(info.BoundingRectangle);
         return new FocusedField
         {
             ElementHandle = element,
+            StableFieldIdentity = stableFieldIdentity,
             ProcessId = info.ProcessId,
             ProcessName = TryGetProcessName(info.ProcessId),
             Text = string.Empty,
@@ -293,6 +299,19 @@ public sealed class UiaFocusTracker : IFocusTracker
         : controlType == ControlType.Pane ? "Pane"
         : controlType == ControlType.ComboBox ? "ComboBox"
         : controlType.ProgrammaticName ?? string.Empty;
+
+    private static string? StableFieldIdentity(AutomationElement element)
+    {
+        try
+        {
+            int[] runtimeId = element.GetRuntimeId();
+            return runtimeId.Length == 0 ? null : string.Join('.', runtimeId);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private string? SafeRead(Func<string> read)
     {

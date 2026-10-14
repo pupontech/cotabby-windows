@@ -16,6 +16,12 @@ public sealed record SuggestionSession
     /// <summary>Element handle of the field this session targets.</summary>
     public required object ElementHandle { get; init; }
 
+    /// <summary>Stable field identity captured when the request was created.</summary>
+    public string? StableFieldIdentity { get; init; }
+
+    /// <summary>Credential policy captured from focus metadata before payload reads.</summary>
+    public bool IsCredentialField { get; init; }
+
     /// <summary>The full prefix as it stood when the session began.</summary>
     public required string OriginalPrefix { get; init; }
 
@@ -26,6 +32,13 @@ public sealed record SuggestionSession
 
     /// <summary>The portion of the streamed suggestion still pending presentation.</summary>
     public required string VisibleText { get; init; }
+
+    /// <summary>
+    /// Best-known text before the caret for this session, including matched
+    /// user input and confirmed Cotabby insertions. UIA can lag behind an insert;
+    /// spacing normalization must not roll back to an older snapshot.
+    /// </summary>
+    public string KnownPrecedingText { get; init; } = string.Empty;
 
     /// <summary>True once the engine signaled the final chunk.</summary>
     public required bool IsComplete { get; init; }

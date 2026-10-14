@@ -40,6 +40,7 @@ public static class SuggestionSessionReconciler
         switch (ev.Kind)
         {
             case KeyKind.Tab:
+                if (ev.HasNonShiftModifier) return new(Outcome.Ignore, session);
                 if (session.VisibleText.Length > 0) return new(Outcome.Accept, session);
                 return new(Outcome.Ignore, session);
 

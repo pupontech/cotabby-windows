@@ -19,17 +19,32 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
         Assert.True(rig.Hook.Emit(Tab()));
         Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
-        Assert.Equal(" again tomorrow", rig.Overlay.Text);
+        Assert.Equal(" again tomorrow today", rig.Overlay.Text);
 
         rig.Clock.Now += 0.1;
         Assert.True(rig.Hook.Emit(Tab()));
 
-        Assert.Equal(new[] { "world", "again tomorrow" }, rig.Inserter.Inserted);
+        Assert.Equal(new[] { "world", " again tomorrow today" }, rig.Inserter.Inserted);
+        Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
         Assert.False(rig.Overlay.IsVisible);
     }
 
     [Fact]
-    public async Task AutoRepeatAcceptsNormallyButDoesNotArmOrCompleteDoubleTap()
+    public async Task PromotedTailUsesKnownInsertedTextWhenUiaSnapshotIsStale()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        rig.Focus.KeepSnapshotStale = true;
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+
+        Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
+        Assert.Equal("Hello ", rig.Focus.Refresh()!.Text);
+    }
+
+    [Fact]
+    public async Task AutoRepeatResetsPendingPairWithoutPromotingTail()
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
 
@@ -39,8 +54,8 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         rig.Clock.Now += 0.05;
         Assert.True(rig.Hook.Emit(Tab()));
 
-        Assert.Equal(new[] { "world", "again", "tomorrow" }, rig.Inserter.Inserted);
-        Assert.False(rig.Overlay.IsVisible);
+        Assert.Equal(new[] { "world", " again", " tomorrow" }, rig.Inserter.Inserted);
+        Assert.Equal(" today", rig.Overlay.Text);
     }
 
     [Fact]
@@ -59,8 +74,8 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         rig.Clock.Now += 0.1;
         Assert.True(rig.Hook.Emit(Tab()));
 
-        Assert.Equal(new[] { "world", "again" }, rig.Inserter.Inserted);
-        Assert.Equal(" tomorrow", rig.Overlay.Text);
+        Assert.Equal(new[] { "world", " again" }, rig.Inserter.Inserted);
+        Assert.Equal(" tomorrow today", rig.Overlay.Text);
     }
 
     [Fact]
@@ -71,7 +86,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         Assert.True(rig.Hook.Emit(Tab()));
         rig.Focus.MakeCredentialField();
         rig.Clock.Now += 0.1;
-        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.False(rig.Hook.Emit(Tab()));
 
         Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
         Assert.False(rig.Overlay.IsVisible);
@@ -83,14 +98,49 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
 
         rig.Focus.MoveToAnotherProcess();
-        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.False(rig.Hook.Emit(Tab()));
 
         Assert.Empty(rig.Inserter.Inserted);
         Assert.False(rig.Overlay.IsVisible);
     }
 
     [Fact]
-    public async Task StaleQueuedTabSnapshotsCannotInsertTheSameChunkTwice()
+    public async Task SameProcessFocusChangePassesTabThroughWithoutWrongFieldInsertion()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+
+        rig.Focus.MoveToAnotherField();
+        Assert.False(rig.Hook.Emit(Tab()));
+
+        Assert.Empty(rig.Inserter.Inserted);
+        Assert.False(rig.Overlay.IsVisible);
+    }
+
+    [Fact]
+    public async Task NullFocusPassesTabThroughWithoutInsertion()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+
+        rig.Focus.ClearField();
+        Assert.False(rig.Hook.Emit(Tab()));
+
+        Assert.Empty(rig.Inserter.Inserted);
+        Assert.False(rig.Overlay.IsVisible);
+    }
+
+    [Fact]
+    public async Task ModifiedTabIsNeverSuppressedOrAccepted()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+
+        Assert.False(rig.Hook.Emit(Tab() with { HasNonShiftModifier = true }));
+
+        Assert.Empty(rig.Inserter.Inserted);
+        Assert.Equal("world again tomorrow today", rig.Overlay.Text);
+    }
+
+    [Fact]
+    public async Task TwoQueuedPhysicalTabsAcceptHeadAndRemainingTailExactlyOnce()
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
         var pendingBefore = rig.Ui.PendingCount;
@@ -104,8 +154,26 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         await rig.Ui.WaitForPendingAtLeastAsync(pendingBefore + 2);
         rig.Ui.DrainAll();
 
-        Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
-        Assert.Equal(" again tomorrow", rig.Overlay.Text);
+        Assert.Equal(new[] { "world", " again tomorrow today" }, rig.Inserter.Inserted);
+        Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
+        Assert.False(rig.Overlay.IsVisible);
+    }
+
+    [Fact]
+    public async Task QueuedTabsUsePhysicalEventGapInsteadOfDispatchTime()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var pendingBefore = rig.Ui.PendingCount;
+
+        Assert.True(await Task.Run(() => rig.Hook.Emit(Tab(), useUiContext: false)));
+        rig.Clock.Now += 0.5;
+        Assert.True(await Task.Run(() => rig.Hook.Emit(Tab(), useUiContext: false)));
+        await rig.Ui.WaitForPendingAtLeastAsync(pendingBefore + 2);
+        rig.Ui.DrainAll();
+
+        Assert.Equal(new[] { "world", " again" }, rig.Inserter.Inserted);
+        Assert.Equal(" tomorrow today", rig.Overlay.Text);
+        Assert.Equal("Hello world again", rig.Focus.HostText);
     }
 
     [Fact]
@@ -137,7 +205,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public TestKeyboardHook Hook { get; } = new();
         public TestFocusTracker Focus { get; } = new();
         public TestOverlay Overlay { get; } = new();
-        public TestTextInserter Inserter { get; } = new();
+        public TestTextInserter Inserter { get; }
         public SuggestionWorkController Work { get; } = new(TimeSpan.Zero);
         public TestSuggestionEngine Engine { get; } = new();
         public ManualClock Clock { get; } = new();
@@ -146,6 +214,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         private Rig(bool doubleTapEnabled)
         {
             Hook.SetUiContext(Ui);
+            Inserter = new TestTextInserter(Focus);
             Coordinator = new SuggestionCoordinator(
                 Hook,
                 Focus,
@@ -225,7 +294,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         {
             Started.TrySetResult();
             await Release.Task.WaitAsync(ct).ConfigureAwait(false);
-            yield return new SuggestionChunk("world again tomorrow", IsFinal: true);
+            yield return new SuggestionChunk("world again tomorrow today", IsFinal: true);
         }
     }
 
@@ -324,6 +393,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         private FocusedField _field = new()
         {
             ElementHandle = new object(),
+            StableFieldIdentity = "test-field",
             ProcessId = Environment.ProcessId + 100,
             ProcessName = "test-host",
             Text = "Hello ",
@@ -335,14 +405,22 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             IsCredentialField = false,
         };
 
+        public bool KeepSnapshotStale { get; set; }
+        public string HostText { get; private set; } = "Hello ";
+
         public FocusedField? Current => _field;
         public event EventHandler<FocusedField?>? FocusChanged { add { } remove { } }
-        public FocusedField? Refresh() => _field;
+        public FocusedField? Refresh() => _field is null
+            ? null
+            : _field with { Text = KeepSnapshotStale ? "Hello " : HostText };
         public void Start() { }
         public void Stop() { }
         public void Dispose() { }
         public void MakeCredentialField() => _field = _field with { IsCredentialField = true };
         public void MoveToAnotherProcess() => _field = _field with { ProcessId = _field.ProcessId + 1 };
+        public void MoveToAnotherField() => _field = _field with { StableFieldIdentity = "other-field" };
+        public void ClearField() => _field = null!;
+        public void ApplyInsertion(string text) => HostText += text;
     }
 
     private sealed class TestOverlay : IOverlayPresenter
@@ -356,10 +434,15 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
     private sealed class TestTextInserter : ITextInserter
     {
+        private readonly TestFocusTracker _focus;
+
+        public TestTextInserter(TestFocusTracker focus) => _focus = focus;
+
         public List<string> Inserted { get; } = new();
         public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
         {
             Inserted.Add(text);
+            _focus.ApplyInsertion(text);
             return Task.FromResult(true);
         }
     }

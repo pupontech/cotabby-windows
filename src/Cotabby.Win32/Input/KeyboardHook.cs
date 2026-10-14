@@ -203,6 +203,8 @@ public sealed class KeyboardHook : IKeyboardHook
                 HasNonShiftModifier = nonShiftMod,
                 IsKeyDown = isDown,
                 IsAutorepeat = isAutorepeat,
+                ForegroundProcessId = ForegroundProcessId(),
+                ForegroundWindowHandle = GetForegroundWindow().ToInt64(),
             };
 
             var args = new KeyEventArgs(evt);
@@ -228,6 +230,14 @@ public sealed class KeyboardHook : IKeyboardHook
         }
 
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
+    private static int ForegroundProcessId()
+    {
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return 0;
+        GetWindowThreadProcessId(foreground, out uint processId);
+        return unchecked((int)processId);
     }
 
     private (KeyKind kind, char ch) Classify(uint vk, uint scanCode)

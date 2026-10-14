@@ -42,28 +42,25 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// <summary>Process id of the host that owned focus when the in-flight request fired.</summary>
     private int _inFlightPid;
     private string? _inFlightRequestId;
-    /// <summary>
-    /// Volatile flag the hook thread reads to decide whether to synchronously
-    /// suppress Tab. A separate primitive from <see cref="_session"/> because
-    /// .NET's memory model doesn't guarantee reference-field visibility across
-    /// threads without explicit fences. Volatile.Write/Read on this int gives
-    /// us a portable acquire/release ordering — Tab acceptance becomes
-    /// deterministic instead of dropping every ~3rd attempt to a stale null.
-    /// </summary>
-    private int _hasVisibleSession; // 0 or 1; written with Volatile.Write
+    private sealed record PresentationSnapshot(
+        string RequestId,
+        string VisibleText,
+        int ProcessId,
+        string? StableFieldIdentity,
+        bool IsCredentialField,
+        long Version);
 
-    /// <summary>
-    /// Snapshot of exactly what the overlay last rendered, written on every
-    /// Show/Update and read by the hook-thread Tab fast-path. The streaming
-    /// work can post a chunk-arrival action that mutates <see cref="_session"/>
-    /// between the hook firing Tab and the dispatcher running AcceptAsync;
-    /// without snapshotting the displayed text we'd insert a later/different
-    /// completion than the one the user accepted with their eyes. Writes
-    /// happen on the UI thread; the hook thread does a release-acquire read.
-    /// </summary>
-    private string? _displayedTextSnapshot;
-    private string? _sessionRequestIdSnapshot;
-    private long _sessionPresentationVersion;
+    private sealed record AcceptIntent(
+        PresentationSnapshot Presentation,
+        double EventTimeSeconds,
+        bool IsTabAccept,
+        bool IsAutorepeat,
+        bool Whole);
+
+    private PresentationSnapshot? _presentation;
+    private long _presentationVersion;
+    private readonly Queue<AcceptIntent> _acceptanceQueue = new();
+    private bool _acceptanceQueueRunning;
     private readonly DoubleTapAcceptanceState _doubleTapAcceptanceState = new();
     private readonly Func<double> _doubleTapUptimeProvider;
     private bool _doubleTapFullAcceptanceEnabled;
@@ -222,16 +219,15 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             // physical double-tap sequence.
             _doubleTapAcceptanceState.Reset();
 
-            // Compare host process, not AutomationElement reference: UIA returns
-            // a fresh AutomationElement instance on every focus event even when
-            // focus stayed on the same conceptual field (Monaco/Electron in
-            // particular re-fire focus when their internal AX tree mutates),
-            // and ReferenceEquals on those instances is always false.
             int newPid = field?.ProcessId ?? 0;
 
-            if (_session is not null && (field is null || newPid != _sessionPid))
+            if (_session is not null
+                && (field is null
+                    || newPid != _sessionPid
+                    || !string.Equals(field.StableFieldIdentity, _session.StableFieldIdentity, StringComparison.Ordinal)
+                    || field.IsCredentialField))
             {
-                CancelSession("focus changed to different process");
+                CancelSession("focus changed to different field");
             }
 
             // Also abort any in-flight work whose request was for a different
@@ -255,65 +251,54 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     {
         if (!_enabled) return;
 
-        // Read the cross-thread visibility flag (release-acquire ordered).
-        bool hasSession = Volatile.Read(ref _hasVisibleSession) != 0;
+        // One acquire read gets one immutable set of presentation and ownership metadata.
+        var presentation = Volatile.Read(ref _presentation);
+        var cachedField = _focus.Current;
+        bool hasSession = presentation is { VisibleText.Length: > 0 };
 
         _logger.LogDebug("Key kind={Kind} char={Char} down={Down} mod={Mod} session={HasSession}",
             args.Event.Kind, (int)args.Event.Character, args.Event.IsKeyDown,
             args.Event.HasNonShiftModifier, hasSession);
 
-        // Tab (or user-configured alternate key) + visible session => accept.
-        // We suppress synchronously here because that's the only way to eat
-        // the key before it reaches the host app, and Post AcceptAsync to the
-        // dispatcher so it runs single-threaded with the rest of the state
-        // machine.
-        bool isTabAccept = args.Event.Kind == KeyKind.Tab && args.Event.IsKeyDown;
+        bool isTabAccept = args.Event.Kind == KeyKind.Tab
+            && args.Event.IsKeyDown
+            && !args.Event.HasNonShiftModifier;
         bool isAltAccept = AlternateAcceptKey is { } alt
             && args.Event.Kind == KeyKind.Character
             && args.Event.IsKeyDown
             && char.ToLowerInvariant(args.Event.Character) == char.ToLowerInvariant(alt);
-        if (hasSession && (isTabAccept || isAltAccept))
-        {
-            long snapshotVersion = Volatile.Read(ref _sessionPresentationVersion);
-            string? requestId = Volatile.Read(ref _sessionRequestIdSnapshot);
-            string? textToInsert = Volatile.Read(ref _displayedTextSnapshot);
-            if (requestId is null || string.IsNullOrEmpty(textToInsert)
-                || snapshotVersion != Volatile.Read(ref _sessionPresentationVersion))
-            {
-                // The visible-session flag raced a presentation change. Pass
-                // this key through rather than accepting a stale snapshot.
-                Post(() => _doubleTapAcceptanceState.Reset());
-                return;
-            }
+        bool ownedPresentation = hasSession
+            && presentation is { IsCredentialField: false, StableFieldIdentity: not null }
+            && cachedField is { IsCredentialField: false }
+            && cachedField.ProcessId == presentation.ProcessId
+            && string.Equals(cachedField.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
+            && (args.Event.ForegroundProcessId == 0 || args.Event.ForegroundProcessId == presentation.ProcessId);
 
+        if (ownedPresentation && (isTabAccept || isAltAccept))
+        {
+            double eventTimeSeconds = _doubleTapUptimeProvider();
+            var intent = new AcceptIntent(
+                presentation!, eventTimeSeconds, isTabAccept, args.Event.IsAutorepeat, isAltAccept);
             args.Suppress = true;
-            // Snapshot the displayed text right now, on the hook thread. Any
-            // chunk that streams in between this point and AcceptAsync running
-            // would otherwise mutate _session.VisibleText and cause us to
-            // insert something the user didn't accept. Stop the engine
-            // immediately for the same reason.
-            bool whole = isAltAccept;
             _work.Cancel();
-            _logger.LogInformation("Accept fast-path (whole={Whole}): snapshot len={Len}.",
-                whole, textToInsert.Length);
-            Post(() => AcceptAsync(
-                textToInsert,
-                whole,
-                requestId,
-                snapshotVersion,
-                isTabAccept,
-                args.Event.IsAutorepeat).ContinueWith(LogFault, TaskScheduler.Default));
+            Post(() => EnqueueAcceptIntent(intent));
             return;
         }
 
-        bool unownedTabPress = isTabAccept && !hasSession;
         Post(() =>
         {
-            if (args.Event.IsKeyDown && (args.Event.Kind != KeyKind.Tab || unownedTabPress))
+            if (args.Event.IsKeyDown && (args.Event.Kind != KeyKind.Tab || !ownedPresentation))
             {
                 _doubleTapAcceptanceState.Reset();
             }
-            if (!unownedTabPress) HandleEvent(args.Event);
+            if (isTabAccept)
+            {
+                // The host already receives this physical Tab. Never insert it
+                // later on the dispatcher after losing the hook fast-path race.
+                if (_session is not null) CancelSession("Tab passed through without verified ownership");
+                return;
+            }
+            HandleEvent(args.Event);
         });
     }
 
@@ -330,27 +315,16 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             switch (result.Outcome)
             {
                 case SuggestionSessionReconciler.Outcome.Accept:
-                    // The hook-thread fast-path missed this Tab (volatile flag
-                    // wasn't yet set when the key fired). Accept on the pump
-                    // where state is consistent. The host already received the
-                    // raw Tab — that's a one-frame cosmetic glitch we accept
-                    // in exchange for deterministic insertion. Snapshot the
-                    // displayed text now so we still insert what's on screen
-                    // even though we missed the fast-path snapshot.
-                    {
-                        string acceptText = _displayedTextSnapshot ?? _session.VisibleText;
-                        AcceptAsync(
-                            acceptText,
-                            whole: false,
-                            _session.RequestId,
-                            _sessionPresentationVersion,
-                            isTabAccept: true,
-                            ev.IsAutorepeat).ContinueWith(LogFault, TaskScheduler.Default);
-                    }
+                    // This key already reached the host. Do not insert on the
+                    // reconciler path; that would duplicate host navigation.
+                    CancelSession("Tab already passed through to host");
                     return;
                 case SuggestionSessionReconciler.Outcome.AdvanceVisible when result.Next is { } next:
-                    _session = next;
-                    PublishSessionSnapshot(next);
+                    _session = next with
+                    {
+                        KnownPrecedingText = _session.KnownPrecedingText + ev.Character,
+                    };
+                    PublishSessionSnapshot(_session);
                     if (next.VisibleText.Length == 0) _doubleTapAcceptanceState.Reset();
                     _overlay.Update(next.VisibleText);
                     if (next.VisibleText.Length == 0 && next.IsComplete)
@@ -568,9 +542,12 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         {
                             RequestId = reqId,
                             ElementHandle = element,
+                            StableFieldIdentity = field.StableFieldIdentity,
+                            IsCredentialField = field.IsCredentialField,
                             OriginalPrefix = request.Prefix,
                             ConsumedChars = 0,
                             VisibleText = accumulated,
+                            KnownPrecedingText = request.Prefix,
                             IsComplete = chunk.IsFinal,
                             AnchorRect = liveAnchor,
                         };
@@ -637,84 +614,96 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         });
     }
 
-    private async Task AcceptAsync(
-        string textToInsert,
-        bool whole,
-        string expectedRequestId,
-        long expectedPresentationVersion,
-        bool isTabAccept,
-        bool isAutorepeat)
+    private void EnqueueAcceptIntent(AcceptIntent intent)
+    {
+        _acceptanceQueue.Enqueue(intent);
+        if (_acceptanceQueueRunning) return;
+        _acceptanceQueueRunning = true;
+        _ = ProcessAcceptanceQueueAsync().ContinueWith(LogFault, TaskScheduler.Default);
+    }
+
+    private async Task ProcessAcceptanceQueueAsync()
+    {
+        try
+        {
+            while (_acceptanceQueue.Count > 0 && !_disposed)
+            {
+                var intent = _acceptanceQueue.Dequeue();
+                if (await AcceptIntentAsync(intent)) continue;
+
+                int discarded = _acceptanceQueue.Count;
+                _acceptanceQueue.Clear();
+                if (discarded > 0)
+                {
+                    _logger.LogWarning(
+                        "Discarded {Count} queued accept intents after the preceding insertion was not confirmed.",
+                        discarded);
+                }
+                break;
+            }
+        }
+        finally
+        {
+            _acceptanceQueueRunning = false;
+        }
+    }
+
+    private async Task<bool> AcceptIntentAsync(AcceptIntent intent)
     {
         var session = _session;
+        var presentation = intent.Presentation;
         if (session is null
-            || session.RequestId != expectedRequestId
-            || Volatile.Read(ref _sessionPresentationVersion) != expectedPresentationVersion
-            || !string.Equals(session.VisibleText, textToInsert, StringComparison.Ordinal))
+            || session.RequestId != presentation.RequestId
+            || !string.Equals(session.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
+            || presentation.IsCredentialField)
         {
             _doubleTapAcceptanceState.Reset();
-            return;
+            _logger.LogInformation("Accept intent no longer belongs to the presented request/field; not accepting replacement text.");
+            return false;
         }
-        if (string.IsNullOrEmpty(textToInsert))
+
+        var field = _focus.Refresh();
+        if (field is null
+            || field.IsCredentialField
+            || field.ProcessId != presentation.ProcessId
+            || field.ProcessId != _sessionPid
+            || !string.Equals(field.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
+            || (intent.Presentation.ProcessId != 0 && field.ProcessId != intent.Presentation.ProcessId))
         {
             _doubleTapAcceptanceState.Reset();
-            return;
+            if (field is null || field.IsCredentialField || field.ProcessId != _sessionPid
+                || !string.Equals(field.StableFieldIdentity, session.StableFieldIdentity, StringComparison.Ordinal))
+            {
+                CancelSession("field ownership changed before insertion");
+            }
+            _logger.LogInformation("Accept intent rejected because live focus does not match its field identity.");
+            return false;
         }
 
         var sessionToken = new DoubleTapAcceptanceState.SessionToken(session.RequestId);
-        double acceptedAtSeconds = 0;
         bool promotedByDoubleTap = false;
-        if (isTabAccept && DoubleTapFullAcceptanceEnabled && !isAutorepeat)
+        if (intent.IsTabAccept && DoubleTapFullAcceptanceEnabled && !intent.IsAutorepeat)
         {
-            acceptedAtSeconds = _doubleTapUptimeProvider();
-            promotedByDoubleTap = _doubleTapAcceptanceState.ConsumeDoubleTap(sessionToken, acceptedAtSeconds);
+            promotedByDoubleTap = _doubleTapAcceptanceState.ConsumeDoubleTap(sessionToken, intent.EventTimeSeconds);
         }
         else
         {
+            // Preserve upstream semantics: a repeat clears the pending pair,
+            // then follows ordinary word acceptance without arming another pair.
             _doubleTapAcceptanceState.Reset();
         }
-        whole |= promotedByDoubleTap;
-        bool armDoubleTap = isTabAccept && DoubleTapFullAcceptanceEnabled && !isAutorepeat && !whole;
 
-        var field = _focus.Refresh();
-        if (field is null)
-        {
-            _logger.LogInformation("AcceptAsync: no focused field at accept time, cancel.");
-            CancelSession("no field at accept");
-            return;
-        }
-
-        if (field.ProcessId != _sessionPid)
-        {
-            _logger.LogInformation("AcceptAsync: focused process changed since suggestion, cancel.");
-            CancelSession("process changed before accept");
-            return;
-        }
-
-        // Typing into a sign-in/verification field is the same violation as
-        // suggesting in one. Focus can move inside a single process without
-        // cancelling the session (cancellation is pid-based), so re-check the
-        // live field here rather than trusting the trigger-time decision.
-        if (field.IsCredentialField)
-        {
-            _doubleTapAcceptanceState.Reset();
-            _logger.LogInformation(
-                "AcceptAsync: focused field is a sign-in/verification field, skip insert.");
-            CancelSession("credential field");
-            return;
-        }
-
-        // FINAL FIREWALL before SendInput. If by some path a degenerate
-        // suggestion slipped through the engine's guards, trim it here.
-        var visible = StripDegenerateTail(textToInsert);
+        bool whole = intent.Whole || promotedByDoubleTap;
+        bool armDoubleTap = intent.IsTabAccept && DoubleTapFullAcceptanceEnabled
+            && !intent.IsAutorepeat && !whole;
+        string visible = StripDegenerateTail(session.VisibleText);
         if (string.IsNullOrEmpty(visible))
         {
-            _logger.LogInformation("AcceptAsync: snapshot was all degenerate after trim, skip insert.");
-            CancelSession("accepted");
-            return;
+            _doubleTapAcceptanceState.Reset();
+            CancelSession("accepted text empty after trim");
+            return false;
         }
 
-        // Chunking mirrors the macOS acceptance model: Tab takes one word (or
-        // phrase), the alternate key takes the whole remaining suggestion.
         string chunk = whole
             ? visible
             : AcceptanceGranularity == "phrase"
@@ -722,87 +711,94 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 : SuggestionSessionReconciler.NextAcceptanceChunk(visible, AcceptPunctuationWithWord);
         if (chunk.Length == 0) chunk = visible;
         string remaining = visible[chunk.Length..];
-
-        var caret = Math.Clamp(field.CaretOffset, 0, field.Text.Length);
-        string livePreceding = field.Text[..caret];
-        string insertion = SuggestionSessionReconciler.InsertionChunk(chunk, livePreceding);
-
-        _logger.LogInformation(
-            "AcceptAsync: whole={Whole} chunk=\"{Chunk}\" insertion=\"{Ins}\" remaining={Rem} chars.",
-            whole, EscapeFull(chunk), EscapeFull(insertion), remaining.Length);
-
+        string insertion = SuggestionSessionReconciler.InsertionChunk(chunk, session.KnownPrecedingText);
         bool exhausted = remaining.Trim().Length == 0;
-        if (exhausted)
-        {
-            CancelSession("accepted");
-        }
-        else
-        {
-            // Advance the session in place: the un-accepted tail stays as
-            // ghost text and the next Tab keeps consuming it.
-            _session = session with
-            {
-                VisibleText = remaining,
-                ConsumedChars = session.ConsumedChars + chunk.Length,
-            };
-            PublishSessionSnapshot(_session);
-            _overlay.Update(remaining);
-            if (armDoubleTap)
-            {
-                _doubleTapAcceptanceState.RecordWordAccept(sessionToken, acceptedAtSeconds);
-            }
-        }
 
         try
         {
             if (insertion.Length > 0)
             {
-                var ok = await _inserter.InsertAsync(field, insertion, CancellationToken.None).ConfigureAwait(false);
-                _logger.LogInformation("AcceptAsync: inserter returned ok={Ok}", ok);
-                if (!ok)
+                bool inserted = await _inserter.InsertAsync(field, insertion, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (!inserted)
                 {
-                    Post(() =>
-                    {
-                        _doubleTapAcceptanceState.Reset();
-                        if (_session?.RequestId == session.RequestId) CancelSession("insertion failed");
-                    });
-                    return;
+                    await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
+                    _logger.LogWarning("Accept insertion returned false; session was not advanced or armed.");
+                    return false;
                 }
             }
-
-            // Give the host ~60ms to publish the inserted text back into UIA,
-            // then re-read the caret so the remaining ghost text re-anchors
-            // where the user now is (or, when exhausted, so the next
-            // suggestion can flow immediately — the upstream post-exhaustion
-            // continuation).
-            await Task.Delay(60).ConfigureAwait(false);
-            Post(() =>
-            {
-                var after = _focus.Refresh();
-                if (after is null) return;
-                if (!exhausted && _session is { } live && live.RequestId == session.RequestId)
-                {
-                    if (!after.CaretRect.IsEmpty)
-                    {
-                        _session = live with { AnchorRect = after.CaretRect };
-                        _overlay.Show(live.VisibleText, after.CaretRect);
-                    }
-                }
-                else if (exhausted && _enabled)
-                {
-                    TriggerGeneration(after);
-                }
-            });
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Insertion threw.");
-            Post(() =>
+            await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
+            _logger.LogWarning(ex, "Accept insertion threw; session was not advanced or armed.");
+            return false;
+        }
+
+        bool committed = false;
+        await PostAsync(() =>
+        {
+            if (_session is null
+                || !ReferenceEquals(_session, session)
+                || _session.RequestId != presentation.RequestId
+                || !string.Equals(_session.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal))
             {
                 _doubleTapAcceptanceState.Reset();
-                if (_session?.RequestId == session.RequestId) CancelSession("insertion failed");
-            });
+                return;
+            }
+
+            if (exhausted)
+            {
+                CancelSession("accepted");
+            }
+            else
+            {
+                _session = session with
+                {
+                    VisibleText = remaining,
+                    ConsumedChars = session.ConsumedChars + chunk.Length,
+                    KnownPrecedingText = session.KnownPrecedingText + insertion,
+                };
+                PublishSessionSnapshot(_session);
+                _overlay.Update(remaining);
+                if (armDoubleTap)
+                {
+                    _doubleTapAcceptanceState.RecordWordAccept(sessionToken, intent.EventTimeSeconds);
+                }
+            }
+            committed = true;
+        }).ConfigureAwait(false);
+
+        if (committed)
+        {
+            _ = RefreshAfterAcceptAsync(session.RequestId, exhausted)
+                .ContinueWith(LogFault, TaskScheduler.Default);
         }
+        return committed;
+    }
+
+    private async Task RefreshAfterAcceptAsync(string requestId, bool exhausted)
+    {
+        await Task.Delay(60).ConfigureAwait(false);
+        await PostAsync(() =>
+        {
+            var after = _focus.Refresh();
+            if (after is null) return;
+            if (!exhausted && _session is { } live && live.RequestId == requestId
+                && string.Equals(after.StableFieldIdentity, live.StableFieldIdentity, StringComparison.Ordinal))
+            {
+                if (!after.CaretRect.IsEmpty)
+                {
+                    _session = live with { AnchorRect = after.CaretRect };
+                    PublishSessionSnapshot(_session);
+                    _overlay.Show(live.VisibleText, after.CaretRect);
+                }
+            }
+            else if (exhausted && _enabled && _session is null)
+            {
+                TriggerGeneration(after);
+            }
+        }).ConfigureAwait(false);
     }
 
     private void CancelSession(string reason)
@@ -822,16 +818,24 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     /// <summary>
     /// Publish one coherent, hook-thread-readable presentation snapshot. The
-    /// version lets queued accepts prove the overlay has not advanced since the
-    /// key was pressed, preventing a stale Tab callback from inserting twice.
+    /// request and field identity bind queued intents to the same presentation;
+    /// successful insertion advances its tail before the next intent is handled.
     /// </summary>
     private void PublishSessionSnapshot(SuggestionSession? session)
     {
-        Volatile.Write(ref _sessionRequestIdSnapshot, session?.RequestId);
-        Volatile.Write(ref _displayedTextSnapshot, session?.VisibleText);
-        Interlocked.Increment(ref _sessionPresentationVersion);
-        Volatile.Write(ref _hasVisibleSession,
-            session is not null && session.VisibleText.Length > 0 ? 1 : 0);
+        long version = Interlocked.Increment(ref _presentationVersion);
+        var presentation = session is not null && session.VisibleText.Length > 0
+            ? new PresentationSnapshot(
+                session.RequestId,
+                session.VisibleText,
+                _sessionPid,
+                session.StableFieldIdentity,
+                session.IsCredentialField,
+                version)
+            : null;
+        Volatile.Write(ref _presentation, presentation);
+
+
     }
 
     private static string Preview(string s) => s.Length <= 40 ? s : s[..40] + "…";

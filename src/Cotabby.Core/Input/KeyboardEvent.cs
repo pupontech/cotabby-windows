@@ -21,6 +21,12 @@ public sealed record KeyboardEvent
 
     /// <summary>True when the platform hook identified this key-down as auto-repeat.</summary>
     public bool IsAutorepeat { get; init; }
+
+    /// <summary>Foreground process observed by the platform hook; zero means unavailable.</summary>
+    public int ForegroundProcessId { get; init; }
+
+    /// <summary>Foreground top-level window observed by the platform hook; zero means unavailable.</summary>
+    public long ForegroundWindowHandle { get; init; }
 }
 
 public enum KeyKind
