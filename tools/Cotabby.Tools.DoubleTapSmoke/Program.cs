@@ -43,7 +43,7 @@ internal static class Program
             ("DT-DELAYED-DISPATCH", DelayedDispatcherDoesNotPromote),
             ("DT-STALE-SNAPSHOT", StaleSnapshotIsRejected),
             ("DT-SAME-PROCESS", SameProcessControlChangePassesThrough),
-            ("DT-SHIFT-TAB", ShiftTabPassesThroughAndKeepsThePair),
+            ("DT-SHIFT-TAB", ShiftTabPassesThroughAndInsertsNothing),
         };
         var results = new List<CaseResult>();
         string? setupIssue = GetDesktopSetupIssue();
@@ -290,35 +290,28 @@ internal static class Program
 
     /// <summary>
     /// Shift+Tab is a distinct binding from Tab (upstream matches the accept key by
-    /// keyCode plus the whole normalized modifier set), so it must reach the host and
-    /// must not consume or re-arm the pending double-tap pair.
+    /// keyCode plus the whole normalized modifier set), so it must reach the host
+    /// instead of being eaten as an accept. It therefore also moves focus in the
+    /// fixture, exactly like any other navigation key, and the live suggestion is
+    /// retired by the resulting focus change rather than accepted.
     /// </summary>
-    private static void ShiftTabPassesThroughAndKeepsThePair()
+    private static void ShiftTabPassesThroughAndInsertsNothing()
     {
         using var fixture = FixtureProcess.Start("shift-tab");
-        var clock = new UptimeClock(30.0);
-        using var rig = Rig.Start(fixture, [" alpha", " beta gamma delta"], uptime: clock);
+        using var rig = Rig.Start(fixture, [" alpha", " beta gamma delta"]);
         PrepareSuggestion(fixture, rig);
         int cursor = rig.EventCount;
-
-        rig.TabPress();
-        rig.WaitForInsertions(1);
 
         rig.ShiftTabPress();
         var shifted = rig.EventsSince(cursor).FirstOrDefault(e => e.Kind == KeyKind.Tab && e.Down && e.Shift);
         Require(shifted is not null, "real hook did not report a shifted Tab-down");
         Require(!shifted!.Suppressed, "Shift+Tab was consumed by Cotabby instead of reaching the host");
-        Require(shifted.Kind == KeyKind.Tab && shifted.Shift, "shifted Tab was not classified as a shifted Tab event");
-        Require(rig.EventsSince(cursor).All(e => e.Kind != KeyKind.Tab || !e.Down || !e.Shift || !e.Autorepeat),
-            "shifted Tab fed the auto-repeat bookkeeping");
+        Require(!shifted.Autorepeat, "a lone Shift+Tab was classified as an auto-repeat");
+        Require(WaitFor(() => fixture.FocusedAutomationId() == fixture.NextAutomationId, TimeSpan.FromSeconds(3)),
+            "Shift+Tab was not delivered to the host as navigation");
 
-        clock.Set(30.1);
-        rig.TabPress();
-        rig.WaitForInsertions(2);
-
-        rig.AssertInsertionChunks([" alpha", " beta gamma delta"]);
-        Require(fixture.ReadState().Text == "seedx alpha beta gamma delta",
-            "Shift+Tab disturbed the pending pair or duplicated text");
+        rig.AssertInsertionChunks([]);
+        AssertFixtureState(fixture, BaseText, BaseText.Length);
     }
 
     private static void PrepareSuggestion(FixtureProcess fixture, Rig rig)
