@@ -220,7 +220,13 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _disposed = true;
         lock (_acceptanceGate)
         {
-            DrainAcceptanceQueueLocked();
+            // Complete every drained intent here. This is the single completion
+            // point for queued keys at disposal; the outstanding sweep below only
+            // backstops an intent already dequeued and in flight.
+            foreach (var intent in DrainAcceptanceQueueLocked())
+            {
+                CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.CoordinatorDisposed);
+            }
         }
         _acceptanceLifetime.Cancel();
         foreach (var intent in _outstandingAcceptanceIntents.Values)
@@ -726,38 +732,62 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
     private async Task ProcessAcceptanceQueueAsync()
     {
-        while (true)
+        AcceptIntent? inFlight = null;
+        try
         {
-            AcceptIntent? intent;
+            while (true)
+            {
+                AcceptIntent? intent;
+                lock (_acceptanceGate)
+                {
+                    if (_disposed || _acceptanceQueue.Count == 0)
+                    {
+                        _acceptanceQueueRunning = false;
+                        return;
+                    }
+                    intent = _acceptanceQueue.Dequeue();
+                }
+
+                inFlight = intent;
+                AcceptanceIntentStatus status;
+                try
+                {
+                    status = await AcceptIntentOnUiAsync(intent, _acceptanceLifetime.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("Accept intent processing failed (type={ExceptionType}).", ex.GetType().Name);
+                    status = AcceptanceIntentStatus.InsertionFaulted;
+                }
+
+                CompleteAcceptanceIntent(intent, status);
+                // A landed insertion that could not be committed in the ordinary
+                // way (InsertedNotCommitted) is still a consumed key, so the
+                // queue keeps draining behind it instead of stopping.
+                if (status is AcceptanceIntentStatus.StateCommitted or AcceptanceIntentStatus.InsertedNotCommitted) continue;
+
+                AcceptanceIntentStatus queuedStatus = _disposed
+                    ? AcceptanceIntentStatus.CoordinatorDisposed
+                    : AcceptanceIntentStatus.BlockedByEarlierFailure;
+                StopQueueAndCompletePending(queuedStatus);
+                return;
+            }
+        }
+        finally
+        {
+            // Fault path: anything that escapes the loop body above — including a
+            // throw from the error logger or a disposition observer — must not
+            // leave _acceptanceQueueRunning set with no processor, or every later
+            // Tab is suppressed, queued and never dequeued. Drain and complete the
+            // in-flight intent and whatever is still queued behind it.
+            List<AcceptIntent> leftover;
             lock (_acceptanceGate)
             {
-                if (_disposed || _acceptanceQueue.Count == 0)
-                {
-                    _acceptanceQueueRunning = false;
-                    return;
-                }
-                intent = _acceptanceQueue.Dequeue();
+                _acceptanceQueueRunning = false;
+                leftover = DrainAcceptanceQueueLocked();
             }
-
-            AcceptanceIntentStatus status;
-            try
-            {
-                status = await AcceptIntentOnUiAsync(intent, _acceptanceLifetime.Token).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("Accept intent processing failed (type={ExceptionType}).", ex.GetType().Name);
-                status = AcceptanceIntentStatus.InsertionFaulted;
-            }
-
-            CompleteAcceptanceIntent(intent, status);
-            if (status == AcceptanceIntentStatus.StateCommitted) continue;
-
-            AcceptanceIntentStatus queuedStatus = _disposed
-                ? AcceptanceIntentStatus.CoordinatorDisposed
-                : AcceptanceIntentStatus.BlockedByEarlierFailure;
-            StopQueueAndCompletePending(queuedStatus);
-            return;
+            if (inFlight is not null) CompleteAcceptanceIntent(inFlight, AcceptanceIntentStatus.QueueFaulted);
+            foreach (var intent in leftover) CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.QueueFaulted);
         }
     }
 
@@ -868,6 +898,9 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         string remaining = visible[chunk.Length..];
         string insertion = SuggestionSessionReconciler.InsertionChunk(chunk, session.KnownPrecedingText);
         bool exhausted = remaining.Trim().Length == 0;
+        // True once the inserter reported the text reached the host, so a later
+        // bail-out can be reported honestly instead of as a replay refusal.
+        bool insertionLanded = false;
 
         try
         {
@@ -881,14 +914,18 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     _logger.LogWarning("Accept insertion returned false; session was not advanced or armed.");
                     return AcceptanceIntentStatus.InsertionRejected;
                 }
+                insertionLanded = true;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
-            return _disposed
-                ? AcceptanceIntentStatus.CoordinatorDisposed
-                : AcceptanceIntentStatus.InsertionCancelled;
+            // The text already reached the host, so this is not a refusal.
+            return insertionLanded
+                ? AcceptanceIntentStatus.InsertedNotCommitted
+                : _disposed
+                    ? AcceptanceIntentStatus.CoordinatorDisposed
+                    : AcceptanceIntentStatus.InsertionCancelled;
         }
         catch (Exception ex)
         {
@@ -900,20 +937,62 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         if (cancellationToken.IsCancellationRequested || _disposed)
         {
             await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
-            return _disposed
-                ? AcceptanceIntentStatus.CoordinatorDisposed
-                : AcceptanceIntentStatus.InsertionCancelled;
+            return insertionLanded
+                ? AcceptanceIntentStatus.InsertedNotCommitted
+                : _disposed
+                    ? AcceptanceIntentStatus.CoordinatorDisposed
+                    : AcceptanceIntentStatus.InsertionCancelled;
         }
 
         bool committed = false;
+        bool reAnchored = false;
+        bool anchorExhausted = exhausted;
         await PostAsync(() =>
         {
-            if (_session is null
-                || !IsSameAcceptanceBase(_session, session)
-                || _session.RequestId != presentation.RequestId
-                || !string.Equals(_session.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal))
+            var live = _session;
+            if (live is null
+                || live.RequestId != presentation.RequestId
+                || !string.Equals(live.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal))
             {
+                // The request or field no longer owns the presentation: fail
+                // closed. The insertion already landed, so the caller reports
+                // InsertedNotCommitted rather than a refusal.
                 _doubleTapAcceptanceState.Reset();
+                return;
+            }
+
+            if (!IsSameAcceptanceBase(live, session))
+            {
+                // Only the base text / consumed prefix moved (a reconciler-consumed
+                // key, or a late chunk for the same request). The text is already in
+                // the host, so re-anchor on the live session instead of failing
+                // closed: always record the confirmed insertion and recompute the
+                // remainder from the live tail so a later accept cannot re-derive
+                // spacing from a base that no longer matches the host.
+                int skip = Math.Max(0, session.ConsumedChars + chunk.Length - live.ConsumedChars);
+                string liveRemaining = live.VisibleText.Length >= skip ? live.VisibleText[skip..] : string.Empty;
+                reAnchored = true;
+                anchorExhausted = liveRemaining.Trim().Length == 0;
+                if (anchorExhausted)
+                {
+                    CancelSession("accepted");
+                }
+                else
+                {
+                    _session = live with
+                    {
+                        VisibleText = liveRemaining,
+                        ConsumedChars = live.ConsumedChars + skip,
+                        KnownPrecedingText = live.KnownPrecedingText + insertion,
+                    };
+                    PublishSessionSnapshot(_session);
+                    _overlay.Update(liveRemaining);
+                    if (armDoubleTap)
+                    {
+                        _doubleTapAcceptanceState.RecordWordAccept(sessionToken, intent.EventTimeSeconds);
+                    }
+                }
+                committed = true;
                 return;
             }
 
@@ -923,7 +1002,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             }
             else
             {
-                _session = _session with
+                _session = live with
                 {
                     VisibleText = remaining,
                     ConsumedChars = session.ConsumedChars + chunk.Length,
@@ -941,14 +1020,19 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
         if (!committed)
         {
-            return _disposed
-                ? AcceptanceIntentStatus.CoordinatorDisposed
-                : AcceptanceIntentStatus.IntentInvalidated;
+            // The insertion landed but the base could not be reconciled; report it
+            // honestly rather than as a replay refusal.
+            if (insertionLanded) return AcceptanceIntentStatus.InsertedNotCommitted;
+            // Nothing landed and the commit was abandoned (session nulled); the
+            // live focus no longer matches this request.
+            return AcceptanceIntentStatus.IntentInvalidated;
         }
 
-        _ = RefreshAfterAcceptAsync(session.RequestId, exhausted)
+        _ = RefreshAfterAcceptAsync(session.RequestId, anchorExhausted)
             .ContinueWith(LogFault, TaskScheduler.Default);
-        return AcceptanceIntentStatus.StateCommitted;
+        return reAnchored
+            ? AcceptanceIntentStatus.InsertedNotCommitted
+            : AcceptanceIntentStatus.StateCommitted;
     }
 
     private static bool IsSameAcceptanceBase(SuggestionSession current, SuggestionSession expected) =>
@@ -988,7 +1072,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         if (!intent.TryComplete()) return;
         _outstandingAcceptanceIntents.TryRemove(intent.Sequence, out _);
 
-        var keyDisposition = status == AcceptanceIntentStatus.StateCommitted
+        var keyDisposition = status is AcceptanceIntentStatus.StateCommitted or AcceptanceIntentStatus.InsertedNotCommitted
             ? AcceptanceKeyDisposition.ConsumedBySuggestion
             : intent.CapturedEvent.ForegroundProcessId == 0
                 || intent.CapturedEvent.ForegroundWindowHandle == 0
