@@ -43,6 +43,7 @@ internal static class Program
             ("DT-DELAYED-DISPATCH", DelayedDispatcherDoesNotPromote),
             ("DT-STALE-SNAPSHOT", StaleSnapshotIsRejected),
             ("DT-SAME-PROCESS", SameProcessControlChangePassesThrough),
+            ("DT-SHIFT-TAB", ShiftTabPassesThroughAndKeepsThePair),
         };
         var results = new List<CaseResult>();
         string? setupIssue = GetDesktopSetupIssue();
@@ -287,6 +288,39 @@ internal static class Program
         AssertFixtureState(fixture, "seed", 4, secondary: true);
     }
 
+    /// <summary>
+    /// Shift+Tab is a distinct binding from Tab (upstream matches the accept key by
+    /// keyCode plus the whole normalized modifier set), so it must reach the host and
+    /// must not consume or re-arm the pending double-tap pair.
+    /// </summary>
+    private static void ShiftTabPassesThroughAndKeepsThePair()
+    {
+        using var fixture = FixtureProcess.Start("shift-tab");
+        var clock = new UptimeClock(30.0);
+        using var rig = Rig.Start(fixture, [" alpha", " beta gamma delta"], uptime: clock);
+        PrepareSuggestion(fixture, rig);
+        int cursor = rig.EventCount;
+
+        rig.TabPress();
+        rig.WaitForInsertions(1);
+
+        rig.ShiftTabPress();
+        var shifted = rig.EventsSince(cursor).FirstOrDefault(e => e.Kind == KeyKind.Tab && e.Down && e.Shift);
+        Require(shifted is not null, "real hook did not report a shifted Tab-down");
+        Require(!shifted!.Suppressed, "Shift+Tab was consumed by Cotabby instead of reaching the host");
+        Require(shifted.Kind == KeyKind.Tab && shifted.Shift, "shifted Tab was not classified as a shifted Tab event");
+        Require(rig.EventsSince(cursor).All(e => e.Kind != KeyKind.Tab || !e.Down || !e.Shift || !e.Autorepeat),
+            "shifted Tab fed the auto-repeat bookkeeping");
+
+        clock.Set(30.1);
+        rig.TabPress();
+        rig.WaitForInsertions(2);
+
+        rig.AssertInsertionChunks([" alpha", " beta gamma delta"]);
+        Require(BaseText + string.Concat(rig.InsertedTexts) == "seedx alpha beta gamma delta",
+            "Shift+Tab disturbed the pending pair or duplicated text");
+    }
+
     private static void PrepareSuggestion(FixtureProcess fixture, Rig rig)
     {
         fixture.FocusEditor();
@@ -434,6 +468,21 @@ internal static class Program
             TabUp();
             Require(WaitFor(() => _events.Since(cursor).Any(e => e.Kind == KeyKind.Tab && !e.Down), TimeSpan.FromSeconds(1)), "real hook did not observe Tab-up");
         }
+        /// <summary>Shift down, Tab down/up, Shift up: the host's reverse-navigation gesture.</summary>
+        public void ShiftTabPress()
+        {
+            int cursor = _events.Count;
+            NativeInput.Key(0x10, down: true);
+            Thread.Sleep(15);
+            TabDown();
+            Require(WaitFor(() => _events.Since(cursor).Any(e => e.Kind == KeyKind.Tab && e.Down), TimeSpan.FromSeconds(1)), "real hook did not observe Shift+Tab-down");
+            Thread.Sleep(25);
+            TabUp();
+            Thread.Sleep(15);
+            NativeInput.Key(0x10, down: false);
+            Require(WaitFor(() => _events.Since(cursor).Any(e => e.Kind == KeyKind.Tab && !e.Down), TimeSpan.FromSeconds(1)), "real hook did not observe Shift+Tab-up");
+        }
+
         public void TabDown() => NativeInput.Key(0x09, down: true);
         public void TabUp() => NativeInput.Key(0x09, down: false);
         public void SendCharacter(char c) => NativeInput.Character(c);
@@ -460,7 +509,7 @@ internal static class Program
         }
     }
 
-    private sealed record HookRecord(KeyKind Kind, char Character, bool Down, bool Autorepeat, bool Suppressed, double At);
+    private sealed record HookRecord(KeyKind Kind, char Character, bool Down, bool Autorepeat, bool Shift, bool Suppressed, double At);
 
     private sealed class EventLog
     {
@@ -471,7 +520,7 @@ internal static class Program
         {
             var e = args.Event;
             if (e.Kind is not (KeyKind.Tab or KeyKind.Character)) return;
-            lock (_gate) _items.Add(new(e.Kind, e.Character, e.IsKeyDown, e.IsAutorepeat, args.Suppress,
+            lock (_gate) _items.Add(new(e.Kind, e.Character, e.IsKeyDown, e.IsAutorepeat, e.HasShiftModifier, args.Suppress,
                 (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency));
         }
         public IReadOnlyList<HookRecord> Since(int cursor) { lock (_gate) return _items.Skip(Math.Clamp(cursor, 0, _items.Count)).ToArray(); }
