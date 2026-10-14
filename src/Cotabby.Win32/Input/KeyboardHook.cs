@@ -195,12 +195,17 @@ public sealed class KeyboardHook : IKeyboardHook
                 || (GetKeyState(VK_MENU) & 0x8000) != 0
                 || (GetKeyState(VK_LWIN) & 0x8000) != 0
                 || (GetKeyState(VK_RWIN) & 0x8000) != 0;
+            // Shift is read separately: Shift+Tab is a distinct binding from Tab,
+            // so the coordinator must be able to tell them apart. One GetKeyState
+            // call, no allocation, no UIA — the hook stack stays O(1).
+            bool shiftMod = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
             var evt = new KeyboardEvent
             {
                 Kind = kind,
                 Character = ch,
                 HasNonShiftModifier = nonShiftMod,
+                HasShiftModifier = shiftMod,
                 IsKeyDown = isDown,
                 IsAutorepeat = isAutorepeat,
                 ForegroundProcessId = ForegroundProcessId(),

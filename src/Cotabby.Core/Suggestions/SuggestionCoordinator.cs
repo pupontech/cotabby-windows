@@ -296,9 +296,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             args.Event.Kind, (int)args.Event.Character, args.Event.IsKeyDown,
             args.Event.HasNonShiftModifier, hasSession);
 
+        // Shift is deliberately not part of HasNonShiftModifier: upstream matches
+        // the accept key by keyCode plus the whole normalized modifier set, so Tab
+        // and Shift+Tab stay distinct bindings. A shifted Tab is the host's
+        // reverse-navigation gesture and must reach the app untouched.
         bool isTabAccept = args.Event.Kind == KeyKind.Tab
             && args.Event.IsKeyDown
-            && !args.Event.HasNonShiftModifier;
+            && !args.Event.HasNonShiftModifier
+            && !args.Event.HasShiftModifier;
         bool isAltAccept = AlternateAcceptKey is { } alt
             && args.Event.Kind == KeyKind.Character
             && args.Event.IsKeyDown

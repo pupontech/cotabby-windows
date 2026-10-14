@@ -16,6 +16,15 @@ public sealed record KeyboardEvent
     /// <summary>True if any modifier (Ctrl, Alt, Win) is held — suggestion triggering should be suppressed.</summary>
     public required bool HasNonShiftModifier { get; init; }
 
+    /// <summary>
+    /// True if Shift is held. Deliberately separate from
+    /// <see cref="HasNonShiftModifier"/>: upstream matches the accept key by
+    /// keyCode *and* the whole normalized modifier set, so <c>Tab</c> and
+    /// <c>Shift+Tab</c> are distinct bindings and a shifted Tab must never be
+    /// classified as an accept key.
+    /// </summary>
+    public bool HasShiftModifier { get; init; }
+
     /// <summary>True on key down, false on key up.</summary>
     public required bool IsKeyDown { get; init; }
 
