@@ -4,7 +4,7 @@
 
 ### Added
 
-- In-progress, global-only opt-in [double-tap Tab acceptance (#840)](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650). Default Backtick remains unchanged; selecting DoubleTap replaces the full-accept key choice. Portable tests pass; exact-diff safety review and Windows hook/runtime proof remain pending. See [scope and acceptance](docs/upstream-double-tap.md).
+- In-progress, global-only opt-in [double-tap Tab acceptance (#840)](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650). Default Backtick remains unchanged; selecting DoubleTap replaces the full-accept key choice. 274 portable tests pass and Windows CI runs 9/9 synthetic real-hook cases (including Shift+Tab pass-through). A key captured by the accept path whose insertion is then refused is NOT replayed; that press is reported, not re-delivered. See [scope and acceptance](docs/upstream-double-tap.md).
 
 ### Fixed
 

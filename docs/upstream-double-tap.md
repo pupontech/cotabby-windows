@@ -3,7 +3,7 @@
 ## Source and current state
 
 Source: [FuJacob/cotabby #840, `3ad86f3ff0c7fa4abe250fde348611f162027650`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650).
-Windows base: `c0a2522` (v0.3.0). Implementation checkpoint: `bf19e5f`.
+Windows base: `c0a2522` (v0.3.0). Implementation checkpoint: `19d8688`.
 This is an **unreleased, review-blocked implementation**, not accepted runtime parity.
 
 The implementation note was written before coding in the scratch workspace. This
@@ -61,7 +61,7 @@ A process guard alone does not prove same-process field identity or key delivery
 | Failed, throwing, delayed and disposed insertion never advances, arms or inserts the tail | Portable tests pass; one outcome is reported per captured key |
 | No insertion into a different process or a different control in the same process | Portable tests pass; synthetic real-hook cases pass on Windows |
 | Legacy defaults, existing choices, DoubleTap round-trip and explicit switch back | Portable settings tests pass against the real settings source |
-| Windows hook, UIA, packaged native layout and fixture text readback | Windows CI run 38552244230: 261 tests, 8/8 synthetic hook cases, credential UIA proof, native DLL load, 546-member byte-verified package |
+| Windows hook, UIA, packaged native layout and fixture text readback | Windows CI run 38566574968: 274 tests, 9/9 synthetic hook cases, credential UIA proof, native DLL load, 546-member byte-verified package |
 | Real model suggestions, physical-key gestures, real host apps | Owner validation pending |
 
 ### Captured-key replay is deliberately refused
@@ -80,7 +80,7 @@ advertised as lossless. Synthetic proof also cannot establish physical key auto-
 
 Using .NET 9 SDK at the existing scratch toolchain:
 
-- `dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore`: **261 passed, 0 failed, 0 skipped**, independently rerun by the parent.
+- `dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore`: **274 passed, 0 failed, 0 skipped**, independently rerun by the parent.
 - Focused double-tap tests after the fix: **11 passed**, repeated three times by
   the writer. Before the fix, three tests hung in their manually queued test
   SynchronizationContext; uncaptured async continuations now allow the explicit
@@ -89,7 +89,7 @@ Using .NET 9 SDK at the existing scratch toolchain:
   writer log records **0 warnings, 0 errors**.
 - Parent `git diff --check`: no diagnostics, exit 0.
 
-Windows CI also runs the real keyboard hook and UI Automation against WPF fixtures: 8/8 cases pass, covering double tap, repeat, unowned Tab, cross-process and same-process focus change, delayed dispatch and stale snapshots. That proof uses a fixture-directed insertion adapter and synthetic keys, so it is not a claim about physical keys or the production SendInput inserter.
+Windows CI also runs the real keyboard hook and UI Automation against WPF fixtures: 9/9 cases pass, covering double tap, repeat, unowned Tab, Shift+Tab, cross-process and same-process focus change, delayed dispatch and stale snapshots. That proof uses a fixture-directed insertion adapter and synthetic keys, so it is not a claim about physical keys or the production SendInput inserter.
 
 Linux unit tests and WPF cross-compilation are **not Windows execution proof**.
 No actual Windows hook, physical key, live model load or constrained decode has
