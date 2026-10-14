@@ -309,10 +309,10 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             && args.Event.IsKeyDown
             && char.ToLowerInvariant(args.Event.Character) == char.ToLowerInvariant(alt);
         bool ownedPresentation = hasSession
-            && presentation is { IsCredentialField: false, StableFieldIdentity: not null }
+            && presentation is { IsCredentialField: false }
             && cachedField is { IsCredentialField: false }
             && cachedField.ProcessId == presentation.ProcessId
-            && string.Equals(cachedField.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
+            && FieldIdentityProvesOwnership(cachedField.StableFieldIdentity, presentation.StableFieldIdentity)
             && (args.Event.ForegroundProcessId == 0 || args.Event.ForegroundProcessId == presentation.ProcessId);
 
         if (ownedPresentation && (isTabAccept || isAltAccept))
@@ -353,6 +353,23 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             }
             HandleEvent(args.Event);
         });
+    }
+
+    /// <summary>
+    /// Field-identity half of the ownership gate on the hook thread. Only a
+    /// PROVEN mismatch refuses: an identity that exists on one side and is absent
+    /// on the other is not proof of a different field. A host whose UIA provider
+    /// yields no runtime id publishes no identity at all, and treating that
+    /// absence as "unowned" silently switched the whole accept fast path off and
+    /// delivered a literal Tab into the app (tab character in an editor, focus
+    /// move in a browser) instead of accepting the suggestion. An identity the
+    /// presentation proved is still required to match the live field exactly.
+    /// </summary>
+    private static bool FieldIdentityProvesOwnership(string? liveIdentity, string? presentedIdentity)
+    {
+        if (string.IsNullOrEmpty(presentedIdentity)) return true;
+        return !string.IsNullOrEmpty(liveIdentity)
+            && string.Equals(liveIdentity, presentedIdentity, StringComparison.Ordinal);
     }
 
     private void HandleEvent(KeyboardEvent ev)
