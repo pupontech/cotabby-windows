@@ -862,6 +862,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         }
 
         var completion = new TaskCompletionSource<AcceptanceIntentStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool completed = false;
         try
         {
             _ui.Post(async _ =>
@@ -881,13 +882,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     completion.TrySetResult(AcceptanceIntentStatus.InsertionFaulted);
                 }
             }, null);
+            // A dispatcher that stops servicing posts must not hold a captured
+            // key forever. Bounded wait, then an honest terminal outcome.
+            completed = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(2), cancellationToken)).ConfigureAwait(false) == completion.Task;
+            if (!completed) return AcceptanceIntentStatus.DispatchFailed;
+            return await completion.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return AcceptanceIntentStatus.InsertionCancelled;
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Could not dispatch a captured accept intent (type={ExceptionType}).", ex.GetType().Name);
             return AcceptanceIntentStatus.DispatchFailed;
         }
-        return await completion.Task.ConfigureAwait(false);
     }
 
     private async Task<AcceptanceIntentStatus> AcceptIntentAsync(
@@ -1112,6 +1121,22 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             : AcceptanceIntentStatus.StateCommitted;
     }
 
+    /// <summary>
+    /// The exhaustion continuation cannot know what the user pressed after the
+    /// final accept, so the gate is evaluated with a neutral printable key event.
+    /// It still carries the focused field, modifiers and process, which is what
+    /// every SuggestionAvailability rule needs; blocked/credential/self/empty
+    /// fields are refused before any request is built.
+    /// </summary>
+    private static readonly KeyboardEvent ContinuationKeyEvent = new()
+    {
+        Kind = KeyKind.Character,
+        Character = '\0',
+        HasNonShiftModifier = false,
+        HasShiftModifier = false,
+        IsKeyDown = true,
+    };
+
     private static bool IsSameAcceptanceBase(SuggestionSession current, SuggestionSession expected) =>
         current.RequestId == expected.RequestId
         && current.ConsumedChars == expected.ConsumedChars
@@ -1199,7 +1224,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     _heldPresentationText = null;
                 }
             }
-            else if (exhausted && _enabled && _session is null)
+            else if (exhausted && _enabled && _session is null
+                && SuggestionAvailability.ShouldRequest(after, ContinuationKeyEvent, BlockedApps))
             {
                 TriggerGeneration(after);
             }
@@ -1361,8 +1387,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void Post(Action action)
     {
         if (_disposed) return;
-        if (SynchronizationContext.Current == _ui) action();
-        else _ui.Post(_ => { if (!_disposed) action(); }, null);
+        if (SynchronizationContext.Current == _ui) { action(); return; }
+        try { _ui.Post(_ => { if (!_disposed) action(); }, null); }
+        catch (Exception ex)
+        {
+            // Never let a dispatcher hop throw on the hook thread; the hook's
+            // handler would pass the key through and the caller cannot know.
+            _logger.LogWarning("Could not dispatch coordinator work (type={ExceptionType}).", ex.GetType().Name);
+        }
     }
 
     private Task PostAsync(Action action)

@@ -62,7 +62,7 @@ public sealed class AppHost : IAsyncDisposable
 
         sc.AddLogging(b =>
         {
-            b.SetMinimumLevel(LogLevel.Debug);
+            b.SetMinimumLevel(LogLevel.Information);
             b.AddDebug();
             b.AddSimpleConsole(opts =>
             {

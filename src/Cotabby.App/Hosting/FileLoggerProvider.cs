@@ -20,11 +20,20 @@ public sealed class FileLoggerProvider : ILoggerProvider
     public FileLoggerProvider(string path)
     {
         _path = path;
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        _writer = new StreamWriter(new FileStream(
-            path, FileMode.Append, FileAccess.Write, FileShare.Read))
-        { AutoFlush = true };
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            _writer = new StreamWriter(new FileStream(
+                path, FileMode.Append, FileAccess.Write, FileShare.Read))
+            { AutoFlush = true };
+        }
+        catch (Exception)
+        {
+            // An unwritable log path must not stop the app from starting; the
+            // file sink stays disabled and console/debug sinks keep logging.
+            _writer = null;
+        }
     }
 
     public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, _gate, _writer);
@@ -52,7 +61,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
         }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => _writer is not null && logLevel >= LogLevel.Debug;
+        public bool IsEnabled(LogLevel logLevel) => _writer is not null && logLevel >= LogLevel.Information;
 
         public void Log<TState>(
             LogLevel logLevel, EventId eventId, TState state,
