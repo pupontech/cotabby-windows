@@ -337,13 +337,15 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// is truncated so the value cannot grow with host content.
     /// </summary>
     /// <remarks>
-    /// Granularity is per host window in the common case where a host gives its
-    /// edits neither an AutomationId nor an accessible name — the same
-    /// granularity the pre-identity process/window check had, and strictly better
-    /// than no identity, because fields the host does distinguish stay
-    /// distinguished. If a host derives its accessible name from the field content
-    /// the fallback flaps as text changes; the failure mode there is a Tab that
-    /// passes through to the host, never an insertion into a different field.
+    /// Two distinct anonymous editable controls in one host window can expose
+    /// identical metadata, which would let this descriptor collide and let a
+    /// suggestion bound to one field be accepted in the other. When the parts
+    /// cannot distinguish a focused element from the previously presented one,
+    /// the descriptor is refused (null): the coordinator then treats ownership as
+    /// UNPROVEN, which passes the Tab through to the host instead of inserting
+    /// into an unproven target. A flapping content-derived name has the same
+    /// failure mode: a Tab pass-through, never an insertion into a different
+    /// field.
     /// </remarks>
     private string? FallbackFieldIdentity(AutomationElement.AutomationElementInformation info)
     {
@@ -359,16 +361,46 @@ public sealed class UiaFocusTracker : IFocusTracker
             return null;
         }
 
-        // Fixed key order and fixed separators, so two fields cannot collide by
-        // reordering; invariant formatting keeps the value identical across
-        // cultures, which matters because it is only ever compared for equality.
-        return string.Concat(
+        string descriptor = string.Concat(
             "ct=", controlType,
             "|aid=", automationId,
             "|nm=", name,
             "|hwnd=", windowHandle.ToString(CultureInfo.InvariantCulture),
             "|pid=", processId.ToString(CultureInfo.InvariantCulture));
+        return FallbackIdentityFromDescriptor(descriptor);
     }
+
+    /// <summary>
+    /// A previous presentation built from the same parts cannot distinguish
+    /// fields, so it must never be reused as proof of ownership. Each distinct
+    /// descriptor is granted a sequence suffix once; a repeat refuses the
+    /// identity so ownership becomes UNPROVEN instead of colliding.
+    /// </summary>
+    internal string? FallbackIdentityFromDescriptor(string descriptor)
+    {
+        int identityIndex = ResolveFieldDescriptorIndex(descriptor);
+        return identityIndex < 0 ? null : string.Concat(descriptor, "|seq=", identityIndex.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Returns the 1-based position of <paramref name="descriptor"/> among the
+    /// focused descriptors this process has produced, or -1 when it repeats. A
+    /// repeated descriptor means the same descriptor could describe a different
+    /// field, so it must never be returned as a stable identity.
+    /// </summary>
+    private int ResolveFieldDescriptorIndex(string descriptor)
+    {
+        lock (_descriptorGate)
+        {
+            if (_descriptorIndex.TryGetValue(descriptor, out int index)) return -1;
+            index = _descriptorIndex.Count + 1;
+            _descriptorIndex[descriptor] = index;
+            return index;
+        }
+    }
+
+    private readonly object _descriptorGate = new();
+    private readonly Dictionary<string, int> _descriptorIndex = new(StringComparer.Ordinal);
 
     private static string ControlTypeNameOrEmpty(ControlType? controlType) =>
         controlType is null ? string.Empty : ControlTypeName(controlType);
