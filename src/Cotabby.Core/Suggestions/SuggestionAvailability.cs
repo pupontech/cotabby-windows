@@ -52,4 +52,13 @@ public static class SuggestionAvailability
     /// <summary>True if a key event should cancel any in-flight or visible suggestion.</summary>
     public static bool ShouldCancel(KeyboardEvent ev) =>
         ev.IsKeyDown && ev.Kind is KeyKind.Escape or KeyKind.Enter or KeyKind.Arrow or KeyKind.Delete;
+
+    /// <summary>
+    /// True when the availability gates pause suggestions for the current
+    /// environment. Port of upstream's Low Power Mode check (#812): only an
+    /// active setting *and* an active energy-saver state suppress requests;
+    /// either half alone keeps suggestions flowing.
+    /// </summary>
+    public static bool ShouldPauseForLowPowerMode(bool lowPowerModeActive, bool autoDisableEnabled) =>
+        lowPowerModeActive && autoDisableEnabled;
 }

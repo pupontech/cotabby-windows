@@ -508,6 +508,20 @@
                                 <CheckBox x:Name="EmojiToggle" Style="{StaticResource Toggle}"
                                           Checked="OnGeneralToggle" Unchecked="OnGeneralToggle" />
                             </Grid>
+                            <Border Style="{StaticResource RowSep}" />
+                            <Grid Style="{StaticResource SettingRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Pause in Low Power Mode" />
+                                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                               Text="Pause suggestions while Windows energy saver is on to reduce battery use." />
+                                </StackPanel>
+                                <CheckBox x:Name="LowPowerToggle" Grid.Column="1" Style="{StaticResource Toggle}"
+                                          Checked="OnGeneralToggle" Unchecked="OnGeneralToggle" />
+                            </Grid>
                         </StackPanel>
                     </Border>
 

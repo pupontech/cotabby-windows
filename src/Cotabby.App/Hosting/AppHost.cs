@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Threading;
 using Cotabby.App.Overlay;
+using Cotabby.App.Power;
 using Cotabby.App.Settings;
 using Cotabby.Core.Focus;
 using Cotabby.Core.Input;
@@ -39,6 +40,9 @@ public sealed class AppHost : IAsyncDisposable
     /// user enables it in the pane (upstream's default).
     /// </summary>
     public PerformanceMetricsStore PerformanceMetrics { get; }
+
+    /// <summary>Windows energy-saver reader behind the Low Power Mode pause gate.</summary>
+    public LowPowerModeMonitor PowerMonitor { get; private set; } = null!;
 
     /// <summary>
     /// Optional emoji picker controller — registered from <c>App.OnStartup</c>
@@ -84,6 +88,7 @@ public sealed class AppHost : IAsyncDisposable
         sc.AddSingleton<SettingsStore>();
         sc.AddSingleton(provider => provider.GetRequiredService<SettingsStore>().Load());
         sc.AddSingleton(_ => new PerformanceMetricsStore(PerformanceLogPath()));
+        sc.AddSingleton<LowPowerModeMonitor>();
 
         sc.AddSingleton<IFocusTracker, UiaFocusTracker>();
         sc.AddSingleton<IKeyboardHook, KeyboardHook>();
@@ -114,6 +119,7 @@ public sealed class AppHost : IAsyncDisposable
         PerformanceMetrics = Services.GetRequiredService<PerformanceMetricsStore>();
         PerformanceMetrics.TrackingEnabled = Settings.EnablePerformanceTracking;
         Coordinator.PerformanceMetrics = PerformanceMetrics;
+        PowerMonitor = Services.GetRequiredService<LowPowerModeMonitor>();
 
         ApplyRuntimeSettings();
     }
@@ -134,6 +140,7 @@ public sealed class AppHost : IAsyncDisposable
     {
         Coordinator.Enabled = Settings.Enabled;
         Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";
+        Coordinator.LowPowerModePause = Settings.PauseInLowPowerMode ? PowerMonitor : null;
 
         var (single, multi) = CompletionLengthPreset.Tokens(Settings.CompletionLengthPreset);
         Coordinator.MaxTokensSingleLine = single;

@@ -231,6 +231,7 @@ public partial class SettingsWindow : Window
         MultiLineToggle.IsChecked = s.AllowMultiLine;
         PunctToggle.IsChecked = s.AcceptPunctuationWithWord;
         EmojiToggle.IsChecked = s.EmojiPickerEnabled;
+        LowPowerToggle.IsChecked = s.PauseInLowPowerMode;
         HintToggle.IsChecked = s.ShowAcceptanceHint;
 
         OpacitySlider.Value = Math.Clamp(s.GhostTextOpacity, 0.3, 1.0);
@@ -247,8 +248,10 @@ public partial class SettingsWindow : Window
         else if (ReferenceEquals(sender, MultiLineToggle)) s.AllowMultiLine = MultiLineToggle.IsChecked == true;
         else if (ReferenceEquals(sender, PunctToggle)) s.AcceptPunctuationWithWord = PunctToggle.IsChecked == true;
         else if (ReferenceEquals(sender, EmojiToggle)) s.EmojiPickerEnabled = EmojiToggle.IsChecked == true;
+        else if (ReferenceEquals(sender, LowPowerToggle)) s.PauseInLowPowerMode = LowPowerToggle.IsChecked == true;
         else if (ReferenceEquals(sender, HintToggle)) s.ShowAcceptanceHint = HintToggle.IsChecked == true;
         _host.PersistSettings();
+        if (ReferenceEquals(sender, LowPowerToggle)) _host.ApplyRuntimeSettings();
         if (ReferenceEquals(sender, HintToggle)) PushAppearance();
     }
 

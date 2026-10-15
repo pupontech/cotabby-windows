@@ -6,6 +6,18 @@ using Microsoft.Extensions.Logging;
 namespace Cotabby.Inference;
 
 /// <summary>
+/// Spell backend contract for the seam guard. The App layer adapts whatever
+/// spell checker is available on the machine; when none is registered the
+/// engine keeps every word "known" and the guard degrades to its pure
+/// junk-run rule.
+/// </summary>
+public interface ISpellAssessor
+{
+    /// <summary>Assess one candidate word for the seam guard.</summary>
+    SpellingAssessment Assess(string word);
+}
+
+/// <summary>
 /// LLamaSharp-backed <see cref="ISuggestionEngine"/>. Mirrors the macOS
 /// llama path: render a base-model conditioning prompt (persona / language
 /// preface + caret prefix), run one constrained greedy decode on the
@@ -109,12 +121,55 @@ public sealed class LlamaSuggestionEngine : ISuggestionEngine
             yield break;
         }
 
+        // Last line of defense before display: junk punctuation runs and
+        // mid-word splices that misspell the word being typed read as glitches,
+        // so showing nothing beats showing them. The leading-word check is
+        // intentionally fail-open for names and jargon: a typo the spell
+        // backend can correct is suppressed, unknown-but-uncorrectable
+        // vocabulary still passes. The spell lookup runs at most once per
+        // generation, in the two cases the guard actually needs it.
+        var seamVerdict = CompletionSeamGuard.Verdict(
+            request.Prefix, normalized.Text, _spellingAssessment);
+        if (seamVerdict != SeamGuardVerdict.Allow)
+        {
+            _logger.LogInformation(
+                "Req {ReqId}: suppressed (seamGuard:{Reason}); raw=\"{Raw}\".",
+                request.RequestId, seamVerdict, Preview(raw));
+            yield return new SuggestionChunk(string.Empty, IsFinal: true);
+            yield break;
+        }
+
         _logger.LogInformation(
             "Req {ReqId}: suggestion \"{Text}\" (raw {RawLen} chars).",
             request.RequestId, Preview(normalized.Text), raw.Length);
         yield return new SuggestionChunk(normalized.Text, IsFinal: false);
         yield return new SuggestionChunk(string.Empty, IsFinal: true);
     }
+
+    /// <summary>
+    /// Collapses native typo detection and correction availability into the
+    /// seam guard's single spelling contract, mirroring the macOS coordinator's
+    /// adapter. Windows has no always-on NSSpellChecker equivalent: a null
+    /// provider makes every word "known" and the guard degrades to its pure
+    /// junk-run rule. The App layer injects an ISpellAssessor when it is
+    /// available on this machine.
+    /// </summary>
+    internal Func<string, SpellingAssessment> _spellingAssessment { private get; set; } =
+        _ => SpellingAssessment.Known;
+
+    /// <summary>Injectable spell backend for the seam guard (null = no spell checking).</summary>
+    public ISpellAssessor? SpellAssessor
+    {
+        get => _spellBackend;
+        set
+        {
+            _spellBackend = value;
+            _spellingAssessment = value is null
+                ? static _ => SpellingAssessment.Known
+                : value.Assess;
+        }
+    }
+    private ISpellAssessor? _spellBackend;
 
     private static bool HasMeaningfulSuffix(string suffix)
     {

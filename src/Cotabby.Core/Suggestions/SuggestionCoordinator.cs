@@ -150,6 +150,13 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     public ISet<string>? BlockedApps { get; set; }
 
     /// <summary>
+    /// When set (App wires the Windows energy-saver reader behind the
+    /// "Pause in Low Power Mode" setting), an active energy-saver state pauses
+    /// new requests. Null disables the check entirely. Mirrors upstream #812.
+    /// </summary>
+    public ILowPowerModeProvider? LowPowerModePause { get; set; }
+
+    /// <summary>
     /// Per-request max-token overrides driven by the completion length preset.
     /// Null falls back to the factory defaults.
     /// </summary>
@@ -430,6 +437,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         if (field is null)
         {
             _logger.LogDebug("No focused field at trigger-decision time.");
+            return;
+        }
+        if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
+        {
+            _logger.LogDebug("Suggestions paused while Windows energy saver is on.");
             return;
         }
         if (!SuggestionAvailability.ShouldRequest(field, ev, BlockedApps))
