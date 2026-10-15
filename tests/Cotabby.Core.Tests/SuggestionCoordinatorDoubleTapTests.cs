@@ -13,6 +13,23 @@ namespace Cotabby.Core.Tests;
 public sealed class SuggestionCoordinatorDoubleTapTests
 {
     [Fact]
+    public async Task RefusedCapturedKeyIsLoggedWithoutAnyDispositionSubscriber()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        rig.Coordinator.AcceptanceIntentCompleted -= rig.Outcomes.Enqueue;
+        rig.Logger.Messages.Clear();
+        rig.Inserter.DelayNext().Release(false);
+
+        Assert.True(rig.Hook.Emit(Tab()));
+
+        var entry = Assert.Single(rig.Logger.Messages, m => m.Message.StartsWith("Captured acceptance key not replayed"));
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("InsertionRejected", entry.Message);
+        Assert.DoesNotContain("Hello", entry.Message);
+        Assert.DoesNotContain("world", entry.Message);
+    }
+
+    [Fact]
     public async Task QuickDistinctSecondTabAcceptsOnlyTheRemainingSuggestion()
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
@@ -432,6 +449,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     private sealed class FaultingLogger : ILogger<SuggestionCoordinator>
     {
         private Func<string, bool>? _throwOn;
+        public ConcurrentQueue<(LogLevel Level, string Message)> Messages { get; } = new();
 
         public Func<string, bool>? ThrowOn
         {
@@ -450,6 +468,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
+            Messages.Enqueue((logLevel, formatter(state, exception)));
             if (_throwOn is { } predicate && predicate(formatter(state, exception)))
             {
                 throw new InvalidOperationException("controlled logger failure");

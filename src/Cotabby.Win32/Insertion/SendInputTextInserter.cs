@@ -29,9 +29,10 @@ namespace Cotabby.Win32.Insertion;
 /// keyup, or between paste and clipboard restore, would otherwise be
 /// processed as live input and interleave with the paste.
 ///
-/// Trade-off: clipboard contents flicker for ~50ms. We save and restore
-/// the previous text contents; anything richer (images, files) is lost
-/// across the round-trip — an acceptable cost for reliable insertion.
+/// Trade-off: clipboard contents change during a long paste. Native formats are
+/// materialized before replacement and restored only while we still own the
+/// clipboard sequence; unreadable formats refuse insertion without changing it.
+/// Input blocking, injection and unblocking run on the same STA thread.
 /// </remarks>
 public sealed class SendInputTextInserter : ITextInserter
 {
@@ -89,8 +90,26 @@ public sealed class SendInputTextInserter : ITextInserter
     {
         ct.ThrowIfCancellationRequested();
         if (!TargetStillFocused(target)) return false;
-        string? savedClipboard = TryReadClipboardText();
+        // Materialize every native format before replacing its OLE owner. If a
+        // format cannot be copied, refuse the paste without touching clipboard.
+        DataObject? savedClipboard;
+        try
+        {
+            var original = Clipboard.GetDataObject();
+            savedClipboard = original is null ? null : new DataObject();
+            if (original is not null)
+            {
+                foreach (var format in original.GetFormats(autoConvert: false))
+                {
+                    var data = original.GetData(format, autoConvert: false);
+                    if (data is null) return false;
+                    savedClipboard!.SetData(format, data, autoConvert: false);
+                }
+            }
+        }
+        catch (Exception) { return false; }
         if (!TryWriteClipboardText(text)) return false;
+        uint ownedClipboardSequence = GetClipboardSequenceNumber();
         try
         {
             Thread.Sleep(15);
@@ -114,7 +133,19 @@ public sealed class SendInputTextInserter : ITextInserter
         }
         finally
         {
-            if (savedClipboard is not null) TryWriteClipboardText(savedClipboard);
+            // Do not overwrite a clipboard copied by another app during paste.
+            if (GetClipboardSequenceNumber() == ownedClipboardSequence)
+            {
+                try
+                {
+                    if (savedClipboard is null) Clipboard.Clear();
+                    else Clipboard.SetDataObject(savedClipboard, copy: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Clipboard restore failed (type={ExceptionType}).", ex.GetType().Name);
+                }
+            }
         }
     }
 
@@ -155,15 +186,6 @@ public sealed class SendInputTextInserter : ITextInserter
         t.IsBackground = true;
         t.Start();
         return tcs.Task;
-    }
-
-    private static string? TryReadClipboardText()
-    {
-        try
-        {
-            return Clipboard.ContainsText() ? Clipboard.GetText() : null;
-        }
-        catch (Exception) { return null; }
     }
 
     private static bool TryWriteClipboardText(string text)

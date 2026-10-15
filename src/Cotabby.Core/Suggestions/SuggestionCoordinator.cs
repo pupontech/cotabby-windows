@@ -1101,6 +1101,17 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     ? AcceptanceKeyDisposition.ReplayRefusedUnknownForeground
                     : AcceptanceKeyDisposition.ReplayRefusedIncompleteKeyMetadata;
         var outcome = new AcceptanceIntentOutcome(intent.Sequence, status, keyDisposition);
+        if (keyDisposition != AcceptanceKeyDisposition.ConsumedBySuggestion)
+        {
+            // This sink is wired by AppHost even when nobody subscribes to the
+            // diagnostic event. Never include field/request/key text or identity.
+            try
+            {
+                _logger.LogWarning("Captured acceptance key not replayed: status={Status}, disposition={Disposition}.",
+                    status, keyDisposition);
+            }
+            catch (Exception) { /* A diagnostic sink must not strand captured keys. */ }
+        }
         var handlers = AcceptanceIntentCompleted;
         if (handlers is null) return;
 

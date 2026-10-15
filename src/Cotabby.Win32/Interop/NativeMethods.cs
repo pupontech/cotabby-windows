@@ -195,5 +195,8 @@ internal static partial class NativeMethods
     public static partial uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [LibraryImport("user32.dll")]
+    public static partial uint GetClipboardSequenceNumber();
+
+    [LibraryImport("user32.dll")]
     public static partial IntPtr GetForegroundWindow();
 }

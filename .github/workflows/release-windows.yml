@@ -183,6 +183,26 @@ jobs:
           "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha" | Set-Content artifacts/release-facts.txt -Encoding ascii
           Write-Output "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha"
 
+      - name: Load extracted CPU native runtime without a model
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class CotabbyNativeReleaseProbe {
+            [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr LoadLibraryExW(string path, IntPtr reserved, uint flags);
+            [DllImport("kernel32", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool FreeLibrary(IntPtr module);
+          }
+          '@
+          $dll = Join-Path $env:RUNNER_TEMP cotabby-release-proof/runtimes/win-x64/native/noavx/llama.dll
+          $handle = [CotabbyNativeReleaseProbe]::LoadLibraryExW($dll, [IntPtr]::Zero, 0x1100)
+          if ($handle -eq [IntPtr]::Zero) { throw "Native CPU load failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+          if (-not [CotabbyNativeReleaseProbe]::FreeLibrary($handle)) { throw 'Native CPU unload failed' }
+          Write-Output 'WINDOWS_CPU_NATIVE_LOAD_PASSED (no model or GPU inference exercised)'
+
       - name: Write release notes
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
