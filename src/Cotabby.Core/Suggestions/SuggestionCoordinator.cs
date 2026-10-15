@@ -299,8 +299,10 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         var cachedField = _focus.Current;
         bool hasSession = presentation is { VisibleText.Length: > 0 };
 
-        _logger.LogDebug("Key kind={Kind} char={Char} down={Down} mod={Mod} session={HasSession}",
-            args.Event.Kind, (int)args.Event.Character, args.Event.IsKeyDown,
+        // This executes for credential fields too: never record the character
+        // or its numeric code, which would reconstruct passwords in debug logs.
+        _logger.LogDebug("Key kind={Kind} down={Down} mod={Mod} session={HasSession}",
+            args.Event.Kind, args.Event.IsKeyDown,
             args.Event.HasNonShiftModifier, hasSession);
 
         // Shift is deliberately not part of HasNonShiftModifier: upstream matches
