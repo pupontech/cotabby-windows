@@ -13,6 +13,20 @@ namespace Cotabby.Core.Tests;
 public sealed class SuggestionCoordinatorDoubleTapTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task KeyDiagnosticsNeverRecordTypedCharacterCodes(bool credential)
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true, showSuggestion: false);
+        if (credential) rig.Focus.MakeCredentialField();
+        rig.Logger.Messages.Clear();
+
+        Assert.False(rig.Hook.Emit(Character('S')));
+
+        Assert.DoesNotContain(rig.Logger.Messages, entry => entry.Message.Contains("char=", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
     [InlineData("credential")]
     [InlineData("other-field")]
     [InlineData("other-process")]

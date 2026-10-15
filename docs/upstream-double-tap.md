@@ -5,7 +5,7 @@
 Source: [FuJacob/cotabby #840, `3ad86f3ff0c7fa4abe250fde348611f162027650`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650).
 Windows implementation is based on v0.3.0, retaining the existing output-budget,
 Performance pane and credential-protection ports. This feature is part of the
-v0.4.0 release preparation; the earlier double-tap test ZIP is superseded by the
+v0.4.1 release preparation; the earlier double-tap test ZIP is superseded by the
 new tagged package once published.
 
 ## Use
@@ -47,8 +47,10 @@ rejected, or the coordinator shuts down. It is deliberately **not replayed** int
 an unknown application. Each captured key has one terminal outcome, and refusals
 produce a content-free warning in the application log even with no diagnostic
 event subscriber. No field text, field identity, request prefix or key character
-is included in that warning. Other existing debug log entries may contain model
-output or typed characters: do not share raw logs.
+is included in that warning. Typed-character codes are no longer recorded by key
+diagnostics. Older versions did record them, including in credential fields:
+delete the previous `C:\tmp\cotabby-live.log` when upgrading. Other diagnostic
+entries still contain model output and local paths; do not share raw logs.
 
 A future lossless replay contract needs immutable raw key/modifier data, original
 foreground target verification and hook-owned tagged injection. This release does

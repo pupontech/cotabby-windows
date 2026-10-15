@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.4.0 — 2026-10-15
+## 0.4.1 — 2026-10-15
+
+The v0.4.0 tag build was cancelled before publication when the final privacy
+review found typed-character debug logging. v0.4.1 is the first published build
+for this cumulative change set. No v0.4.0 release ZIP was published.
 
 ### Added
 
@@ -10,6 +14,7 @@
 
 ### Fixed
 
+- Stop recording typed-character codes in key diagnostics, including credential fields. Older builds' local `C:\tmp\cotabby-live.log` may contain reconstructable keystrokes: remove that old log when upgrading; no logs are included in this release ZIP.
 - Prevent a retiring acceptance processor from draining a replacement queue started by a completion callback or concurrent keypress; queued recovery keys keep their own processor and spacing.
 - Recheck field/process/credential ownership before the first overlay chunk, even when a focus-change notification has not arrived.
 - Revalidate the actual focused UIA element and foreground process at production insertion dispatch; a stale target cannot intentionally direct text into the newly focused field.
