@@ -76,6 +76,7 @@ public partial class SettingsWindow : Window
         new("Backtick", "Backtick"),
         new("Tilde", "Tilde"),
         new("Backslash", "Backslash"),
+        new("DoubleTap", "Double-tap Tab"),
         new("", "None"),
     };
 
@@ -826,6 +827,7 @@ public partial class SettingsWindow : Window
     {
         AcceptKeycapText.Text = (AcceptKeyCombo.SelectedItem as ChoiceItem)?.Id switch
         {
+            "DoubleTap" => "Tab ×2",
             "Tilde" => "~",
             "Backslash" => "\\",
             "" => "—",

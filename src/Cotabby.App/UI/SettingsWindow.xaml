@@ -672,6 +672,9 @@
                                               Margin="10,0,0,0" SelectionChanged="OnAcceptKeyChanged" />
                                 </StackPanel>
                             </Grid>
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,12"
+                                       TextWrapping="Wrap"
+                                       Text="Double-tap Tab accepts a word or phrase first, then accepts the remaining suggestion on a separate Tab press within 0.3 seconds. Holding Tab does not trigger the double-tap." />
                         </StackPanel>
                     </Border>
                 </StackPanel>

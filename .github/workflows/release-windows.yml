@@ -45,6 +45,19 @@ jobs:
       - name: Build Windows application
         run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
 
+      - name: Exercise actual Settings window and production text insertion
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tools/Cotabby.Tools.RegressionSmoke/Cotabby.Tools.RegressionSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw 'Production regression proof failed' }
+
+      - name: Verify double-tap intent and fixture text through real Windows hooks
+        timeout-minutes: 5
+        run: |
+          dotnet run --project tools/Cotabby.Tools.DoubleTapSmoke/Cotabby.Tools.DoubleTapSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw 'Double-tap hook proof failed' }
+          Write-Output 'DOUBLETAP_HOOK_FIXTURE_PROOF=PASSED (fixture adapter; not physical keys)'
+
       - name: Exercise Windows paired GPU counter calculator and safe adapter reads
         run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
 
@@ -101,6 +114,7 @@ jobs:
           ) | Set-Content -LiteralPath (Join-Path $root BUILD-INFO.txt) -Encoding utf8
           Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
           Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
+          Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           @(
             'Cotabby Windows release build'
@@ -114,6 +128,8 @@ jobs:
             'Enable request tracking, generate a suggestion, verify a latency row, then Clear and restart.'
             'Disable tracking and verify new requests add no rows. Confirm the toggle persists after restart.'
             'Switch away from Performance and close Settings; GPU sampling must stop.'
+            'Double-tap: Settings > Shortcuts > Accept Entire Suggestion > Double-tap Tab. First Tab accepts one unit; second distinct Tab within 300ms accepts the remainder once.'
+            'Known limit: a captured acceptance key is not replayed if focus or insertion is rejected; that keypress can be lost. Physical keys and real model suggestions require owner testing.'
             'Credential protection: use dummy values only. Username, verification, card and password inputs should receive no suggestions.'
             'Ordinary writing, email subjects and document-style email bodies should still work.'
             'Browser accessibility metadata varies; this is not complete DOM/autofill parity.'
@@ -167,6 +183,26 @@ jobs:
           "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha" | Set-Content artifacts/release-facts.txt -Encoding ascii
           Write-Output "RELEASE_PACKAGE_VERIFIED=$($files.Count) ZIP_SHA256=$sha"
 
+      - name: Load extracted CPU native runtime without a model
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class CotabbyNativeReleaseProbe {
+            [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr LoadLibraryExW(string path, IntPtr reserved, uint flags);
+            [DllImport("kernel32", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool FreeLibrary(IntPtr module);
+          }
+          '@
+          $dll = Join-Path $env:RUNNER_TEMP cotabby-release-proof/runtimes/win-x64/native/noavx/llama.dll
+          $handle = [CotabbyNativeReleaseProbe]::LoadLibraryExW($dll, [IntPtr]::Zero, 0x1100)
+          if ($handle -eq [IntPtr]::Zero) { throw "Native CPU load failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+          if (-not [CotabbyNativeReleaseProbe]::FreeLibrary($handle)) { throw 'Native CPU unload failed' }
+          Write-Output 'WINDOWS_CPU_NATIVE_LOAD_PASSED (no model or GPU inference exercised)'
+
       - name: Write release notes
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -214,7 +250,7 @@ jobs:
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: Cotabby for Windows ${{ github.ref_name }}
           body_path: artifacts/release-notes.md

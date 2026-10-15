@@ -180,7 +180,7 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     public static partial void PostQuitMessage(int nExitCode);
 
-    [LibraryImport("user32.dll", SetLastError = true)]
+    [LibraryImport("user32.dll", EntryPoint = "PostThreadMessageW", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PostThreadMessage(uint idThread, uint Msg, IntPtr wParam, IntPtr lParam);
 
@@ -193,6 +193,9 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll", SetLastError = true)]
     public static partial uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [LibraryImport("user32.dll")]
+    public static partial uint GetClipboardSequenceNumber();
 
     [LibraryImport("user32.dll")]
     public static partial IntPtr GetForegroundWindow();

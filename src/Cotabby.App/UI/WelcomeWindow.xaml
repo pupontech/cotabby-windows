@@ -386,7 +386,7 @@
                 <TextBlock FontSize="13" Foreground="{DynamicResource TextSecondary}"
                            HorizontalAlignment="Center" TextAlignment="Center"
                            TextWrapping="Wrap" MaxWidth="400" Margin="0,10,0,0"
-                           Text="Start typing anywhere. Press Tab to accept a word, ` for the full suggestion." />
+                           Text="Start typing anywhere. Press Tab to accept a word; see Settings for your full-suggestion shortcut." />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,22,0,0">
                     <TextBlock x:Name="DoneSpinner" Text="&#xE895;"
                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"

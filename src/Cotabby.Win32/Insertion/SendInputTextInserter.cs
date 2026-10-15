@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using Cotabby.Core.Focus;
 using Cotabby.Core.Insertion;
 using Microsoft.Extensions.Logging;
@@ -28,9 +29,10 @@ namespace Cotabby.Win32.Insertion;
 /// keyup, or between paste and clipboard restore, would otherwise be
 /// processed as live input and interleave with the paste.
 ///
-/// Trade-off: clipboard contents flicker for ~50ms. We save and restore
-/// the previous text contents; anything richer (images, files) is lost
-/// across the round-trip — an acceptable cost for reliable insertion.
+/// Trade-off: clipboard contents change during a long paste. Native formats are
+/// materialized before replacement and restored only while we still own the
+/// clipboard sequence; unreadable formats refuse insertion without changing it.
+/// Input blocking, injection and unblocking run on the same STA thread.
 /// </remarks>
 public sealed class SendInputTextInserter : ITextInserter
 {
@@ -63,62 +65,106 @@ public sealed class SendInputTextInserter : ITextInserter
                 _logger.LogInformation(
                     "Inserter (unicode) {Len} chars: \"{Text}\" target.proc={Proc}",
                     text.Length, EscapeFull(text), target.ProcessName);
-                SendUnicodeString(text);
-                return true;
+                return await Task.Run(() =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (!TargetStillFocused(target)) return false;
+                    return SendUnicodeString(text);
+                }, ct).ConfigureAwait(false);
             }
 
             _logger.LogInformation(
                 "Inserter (clipboard paste) received {Len} chars: \"{Text}\" hex={Hex} target.pid={Pid} target.proc={Proc}",
                 text.Length, EscapeFull(text), HexDump(text), target.ProcessId, target.ProcessName);
 
-            // BlockInput keeps physical keystrokes from interleaving with the
-            // synthetic Ctrl+V we're about to send. ~50ms blocked total.
-            bool blocked = BlockInput(true);
-            string? savedClipboard = null;
-            try
-            {
-                // Snapshot existing clipboard so the round-trip is invisible.
-                // STA is required for OLE clipboard ops — InsertAsync is called
-                // from the UI thread in normal operation, but we go through the
-                // dispatcher explicitly to be safe.
-                savedClipboard = await OnStaThreadAsync(TryReadClipboardText).ConfigureAwait(false);
-
-                bool wrote = await OnStaThreadAsync(() => TryWriteClipboardText(text)).ConfigureAwait(false);
-                if (!wrote)
-                {
-                    _logger.LogWarning("Clipboard write failed; cannot paste.");
-                    return false;
-                }
-
-                // Give the host a beat to see the clipboard update before paste.
-                await Task.Delay(15, ct).ConfigureAwait(false);
-
-                SendCtrlV();
-
-                // Wait long enough for the host to consume the paste before we
-                // restore the clipboard. 80ms covers Notepad and Electron paste
-                // pipelines comfortably.
-                await Task.Delay(80, ct).ConfigureAwait(false);
-            }
-            finally
-            {
-                // Restore prior clipboard contents (or clear if nothing was
-                // there originally). Always do this even if paste failed so we
-                // don't leave the user's clipboard pointing at our suggestion.
-                if (savedClipboard is not null)
-                {
-                    try { await OnStaThreadAsync(() => TryWriteClipboardText(savedClipboard)).ConfigureAwait(false); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "Clipboard restore failed."); }
-                }
-                if (blocked) BlockInput(false);
-            }
-
-            return true;
+            return await OnStaThreadAsync(() => PasteOnStaThread(target, text, ct)).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private bool PasteOnStaThread(FocusedField target, string text, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!TargetStillFocused(target)) return false;
+        // Materialize every native format before replacing its OLE owner. If a
+        // format cannot be copied, refuse the paste without touching clipboard.
+        DataObject? savedClipboard;
+        try
+        {
+            var original = Clipboard.GetDataObject();
+            savedClipboard = original is null ? null : new DataObject();
+            if (original is not null)
+            {
+                foreach (var format in original.GetFormats(autoConvert: false))
+                {
+                    var data = original.GetData(format, autoConvert: false);
+                    if (data is null) return false;
+                    savedClipboard!.SetData(format, data, autoConvert: false);
+                }
+            }
+        }
+        catch (Exception) { return false; }
+        if (!TryWriteClipboardText(text)) return false;
+        uint ownedClipboardSequence = GetClipboardSequenceNumber();
+        try
+        {
+            Thread.Sleep(15);
+            ct.ThrowIfCancellationRequested();
+            if (!TargetStillFocused(target)) return false;
+            // Block, inject and unblock on ONE native thread. An await here can
+            // move injection to a thread whose input Windows is still blocking.
+            bool blocked = BlockInput(true);
+            try
+            {
+                bool sent = SendCtrlV();
+                // Dispatch is irreversible. Cancellation after this point must
+                // not turn a sent paste into a reported refusal or skip cleanup.
+                Thread.Sleep(80);
+                return sent;
+            }
+            finally
+            {
+                if (blocked) BlockInput(false);
+            }
+        }
+        finally
+        {
+            // Do not overwrite a clipboard copied by another app during paste.
+            if (GetClipboardSequenceNumber() == ownedClipboardSequence)
+            {
+                try
+                {
+                    if (savedClipboard is null) Clipboard.Clear();
+                    else Clipboard.SetDataObject(savedClipboard, copy: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Clipboard restore failed (type={ExceptionType}).", ex.GetType().Name);
+                }
+            }
+        }
+    }
+
+    // Runs off the WPF dispatcher: querying UIA in-process from the UI thread
+    // can deadlock. Do not trust a snapshot across the semaphore/clipboard waits.
+    private static bool TargetStillFocused(FocusedField target)
+    {
+        if (target.IsCredentialField || target.IsSecure
+            || target.ElementHandle is not AutomationElement expected) return false;
+        try
+        {
+            var current = AutomationElement.FocusedElement;
+            if (current is null || current.Current.ProcessId != target.ProcessId
+                || current.Current.IsPassword || !current.Current.HasKeyboardFocus
+                || !Automation.Compare(expected, current)) return false;
+            var foreground = GetForegroundWindow();
+            GetWindowThreadProcessId(foreground, out uint pid);
+            return foreground != IntPtr.Zero && pid == target.ProcessId;
+        }
+        catch (Exception) { return false; }
     }
 
     /// <summary>
@@ -139,15 +185,6 @@ public sealed class SendInputTextInserter : ITextInserter
         t.IsBackground = true;
         t.Start();
         return tcs.Task;
-    }
-
-    private static string? TryReadClipboardText()
-    {
-        try
-        {
-            return Clipboard.ContainsText() ? Clipboard.GetText() : null;
-        }
-        catch (Exception) { return null; }
     }
 
     private static bool TryWriteClipboardText(string text)
@@ -171,7 +208,7 @@ public sealed class SendInputTextInserter : ITextInserter
     /// virtual-key SendInput rather than KEYEVENTF_UNICODE because Ctrl+V is
     /// a virtual-key shortcut, not a character.
     /// </summary>
-    private static void SendCtrlV()
+    private static bool SendCtrlV()
     {
         var inputs = new INPUT[]
         {
@@ -180,7 +217,7 @@ public sealed class SendInputTextInserter : ITextInserter
             MakeVkInput(VK_V,       keyUp: true),
             MakeVkInput(VK_CONTROL, keyUp: true),
         };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
     }
 
     /// <summary>
@@ -188,7 +225,7 @@ public sealed class SendInputTextInserter : ITextInserter
     /// KEYEVENTF_UNICODE down/up pairs. UTF-16 code units go through as-is,
     /// so surrogate pairs (emoji) arrive intact.
     /// </summary>
-    private static void SendUnicodeString(string text)
+    private static bool SendUnicodeString(string text)
     {
         var inputs = new INPUT[text.Length * 2];
         for (int i = 0; i < text.Length; i++)
@@ -196,7 +233,7 @@ public sealed class SendInputTextInserter : ITextInserter
             inputs[i * 2] = MakeUnicodeInput(text[i], keyUp: false);
             inputs[i * 2 + 1] = MakeUnicodeInput(text[i], keyUp: true);
         }
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
     }
 
     private static INPUT MakeUnicodeInput(char c, bool keyUp) => new()

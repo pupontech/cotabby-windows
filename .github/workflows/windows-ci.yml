@@ -48,6 +48,12 @@ jobs:
       - name: Build Windows application
         run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
 
+      - name: Exercise actual Settings window and production text insertion
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tools/Cotabby.Tools.RegressionSmoke/Cotabby.Tools.RegressionSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw 'Production regression proof failed' }
+
       - name: Exercise Windows paired GPU counter calculator and safe adapter reads
         run: dotnet run --project tools/Cotabby.Tools.GpuSmoke/Cotabby.Tools.GpuSmoke.csproj -c Release
 
@@ -63,6 +69,14 @@ jobs:
           } else {
             throw "Credential UIA proof failed with exit code $code"
           }
+
+      - name: Verify double-tap intent and fixture text through real Windows hooks
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project tools/Cotabby.Tools.DoubleTapSmoke/Cotabby.Tools.DoubleTapSmoke.csproj -c Release -p:EnableWindowsTargeting=true
+          if ($LASTEXITCODE -ne 0) { throw "Double-tap hook proof failed with exit code $LASTEXITCODE" }
+          Write-Output 'DOUBLETAP_HOOK_FIXTURE_PROOF=PASSED (fixture adapter; not production SendInputTextInserter or physical keys)'
 
       - name: Publish self-contained Windows x64 folder
         run: >-
@@ -89,6 +103,7 @@ jobs:
           Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
           Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
+          Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
@@ -101,12 +116,15 @@ jobs:
             'Enable request tracking, generate a suggestion, verify a latency row, then Clear and restart.'
             'Disable tracking and verify new requests add no rows. Confirm the toggle persists after restart.'
             'Switch away from Performance and close Settings; GPU sampling must stop.'
+            'Double-tap: in Settings > Shortcuts choose Accept Entire Suggestion = Double-tap Tab. Tab accepts a word or phrase, then a second distinct Tab within 0.3s accepts the rest once.'
+            'Double-tap checks: hold Tab (must stay word by word), Tab twice quickly (whole remainder once, no duplicated or glued words), Tab then type then Tab (two separate accepts), Tab twice slowly.'
+            'Known limits: a Tab that was captured while focus or insertion was rejected is NOT replayed to the app; the app may miss that keypress.'
             'Credential protection: use dummy values only. Username, verification, card and password inputs should receive no suggestions.'
             'Ordinary writing, email subjects and document-style email bodies should still work.'
             'Browser accessibility metadata varies; this is not complete DOM/autofill parity.'
             'Check C:\tmp\cotabby-live.log for Model ... loaded and Constrained decode.'
             'Do not share the raw log: it can contain your typed text and local paths.'
-            'CI proves tests, compilation, packaging, native loading and synthetic Windows UIA credential guards.'
+            'CI proves tests, compilation, packaging, native loading, synthetic Windows UIA credential guards, and synthetic real-hook double-tap/fixture behaviour (not physical keys).'
             'Real model decoding, UI suggestions, and GPU behavior still require owner testing.'
           ) | Set-Content -LiteralPath (Join-Path $root README-TEST.txt) -Encoding utf8
           $records = @(Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {

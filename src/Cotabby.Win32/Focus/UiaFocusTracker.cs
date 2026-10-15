@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
 using System.Windows.Automation.Provider;
@@ -33,7 +34,7 @@ public sealed class UiaFocusTracker : IFocusTracker
 
     public UiaFocusTracker(ILogger<UiaFocusTracker> logger) => _logger = logger;
 
-    public FocusedField? Current => _fakeField ?? _current;
+    public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
 
@@ -149,6 +150,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         try
         {
             var info = element.Current;
+            string? stableFieldIdentity = StableFieldIdentity(element, info);
             string? automationId = SafeRead(() => info.AutomationId);
             string? name = SafeRead(() => info.Name);
             string? helpText = SafeRead(() => info.HelpText);
@@ -165,7 +167,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             bool isPassword = SafeRead(() => info.IsPassword);
             if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
-                snapshot = BlockedSnapshot(element, info, isPassword);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }
 
@@ -182,7 +184,7 @@ public sealed class UiaFocusTracker : IFocusTracker
                     "Sign-in/verification field left alone (host={Host}, control={Control}). " +
                     "No text, metadata value or request leaves this read.",
                     TryGetProcessName(info.ProcessId), controlType);
-                snapshot = BlockedSnapshot(element, info, isPassword);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }
 
@@ -192,6 +194,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             snapshot = new FocusedField
             {
                 ElementHandle = element,
+                StableFieldIdentity = stableFieldIdentity,
                 ProcessId = info.ProcessId,
                 ProcessName = TryGetProcessName(info.ProcessId),
                 Text = text,
@@ -219,12 +222,16 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// recognized as a sign-in/verification input.
     /// </summary>
     private FocusedField BlockedSnapshot(
-        AutomationElement element, AutomationElement.AutomationElementInformation info, bool isPassword)
+        AutomationElement element,
+        AutomationElement.AutomationElementInformation info,
+        bool isPassword,
+        string? stableFieldIdentity)
     {
         var fieldRect = ToScreenRect(info.BoundingRectangle);
         return new FocusedField
         {
             ElementHandle = element,
+            StableFieldIdentity = stableFieldIdentity,
             ProcessId = info.ProcessId,
             ProcessName = TryGetProcessName(info.ProcessId),
             Text = string.Empty,
@@ -294,10 +301,97 @@ public sealed class UiaFocusTracker : IFocusTracker
         : controlType == ControlType.ComboBox ? "ComboBox"
         : controlType.ProgrammaticName ?? string.Empty;
 
+    /// <summary>
+    /// Stable identity for a field. UIA's RuntimeId is the primary source, but a
+    /// provider is allowed to throw or to return an empty array (a proxied or
+    /// custom control, an element torn down mid-read, a host that does not
+    /// implement <c>IRawElementProviderFragment.GetRuntimeId</c>). Losing it must
+    /// not silently switch acceptance off, so we fall back to a bounded,
+    /// content-free descriptor; only when even that is unavailable do we return
+    /// null, which the coordinator reads as UNPROVEN ownership — never as proof of
+    /// a different field.
+    /// </summary>
+    private string? StableFieldIdentity(
+        AutomationElement element,
+        AutomationElement.AutomationElementInformation info)
+    {
+        int[]? runtimeId;
+        try
+        {
+            runtimeId = element.GetRuntimeId();
+        }
+        catch (Exception)
+        {
+            runtimeId = null;
+        }
+
+        return runtimeId is { Length: > 0 }
+            ? string.Join('.', runtimeId)
+            : FallbackFieldIdentity(info);
+    }
+
+    /// <summary>
+    /// Content-free, length-bounded stand-in identity used when the runtime id is
+    /// missing: control type + AutomationId + accessible name + owning window
+    /// handle + process id. Field text is never read here, and every string part
+    /// is truncated so the value cannot grow with host content.
+    /// </summary>
+    /// <remarks>
+    /// Granularity is per host window in the common case where a host gives its
+    /// edits neither an AutomationId nor an accessible name — the same
+    /// granularity the pre-identity process/window check had, and strictly better
+    /// than no identity, because fields the host does distinguish stay
+    /// distinguished. If a host derives its accessible name from the field content
+    /// the fallback flaps as text changes; the failure mode there is a Tab that
+    /// passes through to the host, never an insertion into a different field.
+    /// </remarks>
+    private string? FallbackFieldIdentity(AutomationElement.AutomationElementInformation info)
+    {
+        string controlType = ControlTypeNameOrEmpty(info.ControlType);
+        string automationId = Truncate(SafeRead(() => info.AutomationId));
+        string name = Truncate(SafeRead(() => info.Name));
+        int windowHandle = SafeRead(() => info.NativeWindowHandle);
+        int processId = SafeRead(() => info.ProcessId);
+
+        if (controlType.Length == 0 && automationId.Length == 0 && name.Length == 0
+            && windowHandle == 0 && processId == 0)
+        {
+            return null;
+        }
+
+        // Fixed key order and fixed separators, so two fields cannot collide by
+        // reordering; invariant formatting keeps the value identical across
+        // cultures, which matters because it is only ever compared for equality.
+        return string.Concat(
+            "ct=", controlType,
+            "|aid=", automationId,
+            "|nm=", name,
+            "|hwnd=", windowHandle.ToString(CultureInfo.InvariantCulture),
+            "|pid=", processId.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static string ControlTypeNameOrEmpty(ControlType? controlType) =>
+        controlType is null ? string.Empty : ControlTypeName(controlType);
+
+    /// <summary>Bounded slice of a metadata string so a fallback identity cannot
+    /// grow with host content.</summary>
+    private static string Truncate(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : value.Length <= MaxIdentityPartLength ? value : value[..MaxIdentityPartLength];
+
+    private const int MaxIdentityPartLength = 128;
+
     private string? SafeRead(Func<string> read)
     {
         try { return read(); }
         catch (Exception) { return null; }
+    }
+
+    private int SafeRead(Func<int> read)
+    {
+        try { return read(); }
+        catch (Exception) { return 0; }
     }
 
     private bool SafeRead(Func<bool> read)

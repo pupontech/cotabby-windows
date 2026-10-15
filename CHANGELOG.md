@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 — 2026-10-15
+
+### Added
+
+- Complete the global, opt-in [double-tap Tab acceptance port (#840)](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650): first Tab accepts a word/phrase, second distinct Tab within 300 ms accepts the remainder once. Backtick remains the default; Shift+Tab stays navigation. Serialized acceptance preserves spacing and handles repeats, delayed/failed insertion, focus changes and disposal. See [scope and verification](docs/upstream-double-tap.md).
+- Content-free application-log warnings for captured acceptance keys that cannot be inserted and are deliberately not replayed. No unsafe injection into an unknown foreground window.
+- Actual Windows Settings dropdown/persistence and production text-inserter runtime regressions in both CI and the release workflow, in addition to nine synthetic hook/UIA cases.
+
+### Fixed
+
+- Prevent a retiring acceptance processor from draining a replacement queue started by a completion callback or concurrent keypress; queued recovery keys keep their own processor and spacing.
+- Recheck field/process/credential ownership before the first overlay chunk, even when a focus-change notification has not arrived.
+- Revalidate the actual focused UIA element and foreground process at production insertion dispatch; a stale target cannot intentionally direct text into the newly focused field.
+- Keep input blocking, clipboard paste and unblocking on one STA thread instead of crossing async continuations, which could silently lose long completions or leave input blocked.
+- Preserve non-text clipboard formats, restore an originally empty clipboard, and avoid replacing a clipboard changed by another application. If a format cannot be copied, refuse long insertion before modifying it.
+- Respect SendInput's dispatched-event count rather than reporting success unconditionally. Finish cleanup after an irreversible dispatch even when cancellation arrives.
+- Preserve all earlier ports: full output-budget reservation (#851), partial GPU/request Performance pane (#858), and credential-field protection (#848).
+
+### Known limits
+
+- Rejected captured keys are not replayed; that press can be lost. Warnings make this visible without logging its content.
+- Physical keys, live-model suggestions, per-application accessibility and GPU accuracy still require owner testing. CI uses real Windows hooks/UIA with synthetic input and a deterministic engine; it is not live-model or universal host parity proof.
+
 ## 0.3.0 — 2026-10-13
 
 ### Added

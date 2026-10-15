@@ -40,6 +40,10 @@ public static class SuggestionSessionReconciler
         switch (ev.Kind)
         {
             case KeyKind.Tab:
+                // Shift+Tab is a distinct binding from Tab (upstream matches the
+                // accept key by keyCode plus the full normalized modifier set), so
+                // a shifted Tab is navigation, never acceptance input.
+                if (ev.HasNonShiftModifier || ev.HasShiftModifier) return new(Outcome.Ignore, session);
                 if (session.VisibleText.Length > 0) return new(Outcome.Accept, session);
                 return new(Outcome.Ignore, session);
 
