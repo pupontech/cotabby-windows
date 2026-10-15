@@ -69,8 +69,7 @@ public sealed class SendInputTextInserter : ITextInserter
                 {
                     ct.ThrowIfCancellationRequested();
                     if (!TargetStillFocused(target)) return false;
-                    SendUnicodeString(text);
-                    return true;
+                    return SendUnicodeString(text);
                 }, ct).ConfigureAwait(false);
             }
 
@@ -120,11 +119,11 @@ public sealed class SendInputTextInserter : ITextInserter
             bool blocked = BlockInput(true);
             try
             {
-                SendCtrlV();
+                bool sent = SendCtrlV();
                 // Dispatch is irreversible. Cancellation after this point must
                 // not turn a sent paste into a reported refusal or skip cleanup.
                 Thread.Sleep(80);
-                return true;
+                return sent;
             }
             finally
             {
@@ -209,7 +208,7 @@ public sealed class SendInputTextInserter : ITextInserter
     /// virtual-key SendInput rather than KEYEVENTF_UNICODE because Ctrl+V is
     /// a virtual-key shortcut, not a character.
     /// </summary>
-    private static void SendCtrlV()
+    private static bool SendCtrlV()
     {
         var inputs = new INPUT[]
         {
@@ -218,7 +217,7 @@ public sealed class SendInputTextInserter : ITextInserter
             MakeVkInput(VK_V,       keyUp: true),
             MakeVkInput(VK_CONTROL, keyUp: true),
         };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
     }
 
     /// <summary>
@@ -226,7 +225,7 @@ public sealed class SendInputTextInserter : ITextInserter
     /// KEYEVENTF_UNICODE down/up pairs. UTF-16 code units go through as-is,
     /// so surrogate pairs (emoji) arrive intact.
     /// </summary>
-    private static void SendUnicodeString(string text)
+    private static bool SendUnicodeString(string text)
     {
         var inputs = new INPUT[text.Length * 2];
         for (int i = 0; i < text.Length; i++)
@@ -234,7 +233,7 @@ public sealed class SendInputTextInserter : ITextInserter
             inputs[i * 2] = MakeUnicodeInput(text[i], keyUp: false);
             inputs[i * 2 + 1] = MakeUnicodeInput(text[i], keyUp: true);
         }
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
     }
 
     private static INPUT MakeUnicodeInput(char c, bool keyUp) => new()

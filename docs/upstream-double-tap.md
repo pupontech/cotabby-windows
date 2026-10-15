@@ -1,108 +1,87 @@
 # Double-tap acceptance: upstream #840 Windows adaptation
 
-## Source and current state
+## Source and scope
 
 Source: [FuJacob/cotabby #840, `3ad86f3ff0c7fa4abe250fde348611f162027650`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650).
-Windows base: `c0a2522` (v0.3.0). Implementation checkpoint: `19d8688`.
-This is an **unreleased, review-blocked implementation**, not accepted runtime parity.
+Windows implementation is based on v0.3.0, retaining the existing output-budget,
+Performance pane and credential-protection ports. This feature is part of the
+v0.4.0 release preparation; the earlier double-tap test ZIP is superseded by the
+new tagged package once published.
 
-The implementation note was written before coding in the scratch workspace. This
-repository note carries its scope, rationale and current evidence forward; it does
-not imply that all acceptance criteria below have passed.
+## Use
 
-## Intended behavior
+Select **Settings > Shortcuts > Accept Entire Suggestion > Double-tap Tab**.
+The first distinct Tab accepts the next word or phrase immediately. A second
+press within the inclusive 300 ms window accepts the remainder of the same
+suggestion once. Key-up separates presses. Autorepeat accepts ordinary units,
+resets pending state, and never arms or completes a double tap. Shift+Tab remains
+host navigation. Intervening input, replacement/cancellation, focus changes,
+settings application and credential rejection retire pending state.
 
-Select **Settings → Shortcuts → Accept Entire Suggestion → Double-tap Tab**.
-The first distinct Tab accepts the normal word or phrase immediately. A second
-physical press within the inclusive 300 ms window accepts the remainder of the
-same suggestion once. A key-up separates physical presses; it does not cancel a
-pair. Repeats remain ordinary-unit accepts and never arm or complete a pair.
-Intervening input, session replacement, cancellation, focus transition, settings
-application and credential rejection retire pending state.
+The default remains Backtick. DoubleTap replaces the single full-accept slot;
+switching back requires choosing Backtick, Tilde or Backslash explicitly. Legacy
+settings retain Backtick. There are no per-app bindings or typing-history storage.
+The overlay Tab chip still identifies the first-press key, not the whole gesture.
 
-## Windows scope and deliberate deviations
+## Safety contract
 
-- Global, fixed Tab gesture only. No per-app shortcut overrides or key recorder;
-  existing process blocklisting is unchanged.
-- One active full-accept slot uses the existing `AcceptSuggestionKey` string.
-  `DoubleTap` replaces the previous choice; switching back requires selecting
-  Backtick/Tilde/Backslash explicitly. It does not retain a dormant prior binding.
-  Legacy/missing settings still default to Backtick; double-tap is opt-in.
-- Stable `RequestId` replaces upstream's `(generation, fullText)` token. Mutating
-  the visible tail must not change the identity of the current suggestion.
-- Windows synthesizes autorepeat from Tab down/up transitions because the
-  low-level hook has no repeat flag. Synthetic proof cannot establish behavior
-  for real physical holds, lost key-up events or all host applications.
-- The overlay's existing Tab chip still identifies the first-press key, not the
-  double-tap gesture. Settings explains the second press. Welcome copy must not
-  claim that Backtick is always the active full-accept binding.
-- No Apple APIs, new model choices, inference changes, telemetry, typing-history
-  collection or single-file packaging.
+Acceptance is serialized and tied to request, process and field identity. A
+confirmed insertion advances the known prefix before the next queued accept,
+including when UIA's text snapshot lags. The coordinator rejects a refreshed
+credential or changed target and never inserts replacement-request text.
 
-## Ownership and implementation
+The production inserter also revalidates the actual focused UIA element and its
+foreground process after its own asynchronous waits, immediately before dispatch.
+Long paste operations perform input blocking, injection and unblocking on a single
+STA thread, with no await inside the blocked region. Clipboard formats are copied
+before replacement and restored only while Cotabby still owns the clipboard
+sequence. If a format cannot be copied, long insertion is refused without changing
+the clipboard. Cancellation before dispatch refuses the operation; cancellation
+after dispatch does not undo a sent paste. A successful SendInput call establishes
+OS dispatch, not acknowledgement by every host application.
 
-Core: `DoubleTapAcceptanceState`, `SuggestionCoordinator`, `KeyboardEvent` and
-focused tests. Win32: `KeyboardHook` derives repeat metadata. App:
-`AppSettings`, `AppHost` and `SettingsWindow` persist and apply the choice.
-The final accept-time process guard rejects a live field whose process differs
-from the suggestion owner before reading its text. Existing metadata-first
-credential admission and all request/accept/emoji guards remain in force.
-A process guard alone does not prove same-process field identity or key delivery.
+### Rejected captured keys are not replayed
 
-## Acceptance matrix and evidence
+A captured Tab or full-accept key can be lost if focus changes, insertion is
+rejected, or the coordinator shuts down. It is deliberately **not replayed** into
+an unknown application. Each captured key has one terminal outcome, and refusals
+produce a content-free warning in the application log even with no diagnostic
+event subscriber. No field text, field identity, request prefix or key character
+is included in that warning. Other existing debug log entries may contain model
+output or typed characters: do not share raw logs.
 
-| Criterion | Current evidence |
-| --- | --- |
-| Inclusive 300 ms, one-shot pair, mismatch and clock regression | Portable state tests pass (RED then GREEN) |
-| Immediate first unit, second-tail promotion, phrase mode | Coordinator tests pass with a mutable host-text fixture |
-| Repeat and intervening-key rejection | Portable tests pass; synthetic real-hook repeat case passes on Windows |
-| Rapid queued Tabs keep both intents exactly once, and a physical gap wider than the window stays two units | Portable tests pass; synthetic real-hook case passes on Windows |
-| Exact combined host text with a stale UIA snapshot | Portable test asserts the final host string; synthetic real-hook case passes on Windows |
-| Failed, throwing, delayed and disposed insertion never advances, arms or inserts the tail | Portable tests pass; one outcome is reported per captured key |
-| No insertion into a different process or a different control in the same process | Portable tests pass; synthetic real-hook cases pass on Windows |
-| Legacy defaults, existing choices, DoubleTap round-trip and explicit switch back | Portable settings tests pass against the real settings source |
-| Windows hook, UIA, packaged native layout and fixture text readback | Windows CI run 38566574968: 274 tests, 9/9 synthetic hook cases, credential UIA proof, native DLL load, 546-member byte-verified package |
-| Real model suggestions, physical-key gestures, real host apps | Owner validation pending |
+A future lossless replay contract needs immutable raw key/modifier data, original
+foreground target verification and hook-owned tagged injection. This release does
+not claim that contract or universal atomic focus/insertion guarantees.
 
-### Captured-key replay is deliberately refused
+## Verification evidence
 
-A Tab (or the full-accept key) is eaten only when an accept is expected to happen. If that accept is
-then rejected - insertion refused, insertion threw, focus moved, field identity changed, the
-coordinator was disposed - the key is NOT replayed into the application, so that press is lost. The
-coordinator reports one outcome per captured key (`Committed`, `InsertionRejected`, `InsertionThrew`,
-`Invalidated`, `Blocked`, `CoordinatorDisposed`, `DispatchFailed`) and never sprays a synthetic key at
-an unknown target and never retries. A future replay path needs immutable raw key data, exact
-modifier state, the original foreground window and a hook-owned tagged injection marker checked
-immediately before dispatch; until that exists, refusal is the honest behaviour and must not be
-advertised as lossless. Synthetic proof also cannot establish physical key auto-repeat.
+Windows verification [run 38732360964](https://github.com/pupontech/cotabby-windows/actions/runs/38732360964)
+on `39031e0a72a68be5a17ba132e1f5e5933d8c9c7e` passed:
 
-## Verified local commands
+- 275 unit tests, no failures/skips.
+- Actual rendered Settings dropdown: Double-tap Tab visible, selectable and saved.
+- Production inserter: short Unicode and long clipboard chunks read back exactly
+  from a real WPF host, stale-target rejection, text and custom clipboard-format
+  preservation.
+- Nine synthetic real-hook/UIA fixture cases: double tap, repeat, unowned Tab,
+  cross-process/same-process focus changes, default Backtick, delayed dispatch,
+  stale snapshots and Shift+Tab pass-through. The fixture adapter is separate from
+  the production inserter proof and does not establish physical-key behavior.
+- Real Windows UIA credential guards, GPU counter/persistence smoke, complete
+  package manifest verification and native CPU DLL loading without a model.
 
-Using .NET 9 SDK at the existing scratch toolchain:
+Regressions were first observed failing on Windows: stale-target injection in
+run 38731061978, lost long paste in run 38731445887, and clipboard-format loss in
+run 38731877706. The portable refusal-log test also failed before its fix.
+Subsequent release commits must pass the same gates at their own exact SHA.
 
-- `dotnet test tests/Cotabby.Core.Tests/Cotabby.Core.Tests.csproj -c Release --no-restore`: **274 passed, 0 failed, 0 skipped**, independently rerun by the parent.
-- Focused double-tap tests after the fix: **11 passed**, repeated three times by
-  the writer. Before the fix, three tests hung in their manually queued test
-  SynchronizationContext; uncaptured async continuations now allow the explicit
-  queue pump to run. No tests were skipped or deleted.
-- `dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release -p:EnableWindowsTargeting=true`:
-  writer log records **0 warnings, 0 errors**.
-- Parent `git diff --check`: no diagnostics, exit 0.
+## Owner-live checks and rollback
 
-Windows CI also runs the real keyboard hook and UI Automation against WPF fixtures: 9/9 cases pass, covering double tap, repeat, unowned Tab, Shift+Tab, cross-process and same-process focus change, delayed dispatch and stale snapshots. That proof uses a fixture-directed insertion adapter and synthetic keys, so it is not a claim about physical keys or the production SendInput inserter.
-
-Linux unit tests and WPF cross-compilation are **not Windows execution proof**.
-No actual Windows hook, physical key, live model load or constrained decode has
-been verified for this port yet. No tag or release was created.
-
-## Rollback and delivery gates
-
-Revert the focused implementation commit to remove the optional choice, timing
-state and repeat wiring while retaining existing Backtick/Tab behavior. Select
-Backtick explicitly if rolling back a config that selected DoubleTap.
-
-Before delivery: resolve exact-diff safety findings, add missing focused tests,
-correct misleading UI copy, run all local gates on a quiescent tree, open a PR,
-verify exact-head Windows CI including attributed real-hook proof, and verify
-all downloaded ZIP manifest members and source provenance. Live Windows/model
-acceptance stays explicit. Tags/releases require separate owner authorization.
+Extract the whole ZIP into a new folder and run Cotabby.exe as a standard user.
+Existing settings and model cache are reused. Enable Double-tap Tab, check a
+quick pair, a slow pair, a held Tab, Shift+Tab, typing between accepts, phrase mode,
+and focus changes in the applications you use. Verify short/long suggestions with
+an actual cached/downloaded model. Physical keys, live model decoding, browser
+metadata variability and GPU accuracy remain owner-live checks, not CI claims.
+Select Backtick in Settings to turn the optional gesture off.

@@ -1,6 +1,6 @@
 # Cotabby for Windows
 
-**Current release: v0.3.0** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
+**Current release: v0.4.0** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
 in [`VERSION`](VERSION) and is stamped into the shipped build).
 
 Local AI autocomplete for Windows. A system-wide ghost-text suggestion engine that
@@ -19,7 +19,10 @@ suggestions on `Tab`. This port replaces that stack with WPF, UI Automation (UIA
   (Notepad, VS Code, Slack, Discord, Outlook, browser inputs, …).
 - **Word-by-word acceptance** — press `Tab` to take the next word (or whole phrase, in
   phrase mode) and keep pressing to take more, exactly like the macOS app; press
-  `` ` `` (backtick) to take the entire suggestion at once.
+  `` ` `` (backtick) to take the entire suggestion at once by default. Optionally
+  choose **Double-tap Tab** in Settings > Shortcuts: the second distinct Tab within
+  300 ms accepts the rest. Rejected captured keys are not replayed; see the
+  [acceptance safety contract](docs/upstream-double-tap.md).
 - **Local completion models** — general-purpose base models plus a code-focused
   Qwen3.5 Coder option. Base models continue
   your text instead of chatting at it, which is what makes the suggestions read
@@ -160,7 +163,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Fill-in-middle for mid-line carets | ✅ (Qwen3.5 models)       |
 | Word-by-word / phrase acceptance   | ✅ (`Tab`, mode in Shortcuts) |
 | Accept-whole key                   | ✅ (`` ` `` backtick default) |
-| Double-tap Tab ([upstream #840](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650)) | Unreleased global-only opt-in; 274 portable tests pass and Windows CI runs 9/9 real-hook cases; owner live validation pending. [Scope and acceptance](docs/upstream-double-tap.md) |
+| Double-tap Tab ([upstream #840](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650)) | Global-only opt-in in v0.4.0; synthetic Windows hook/UIA and production-inserter proofs. Physical keys/live models remain owner-verified. [Scope and acceptance](docs/upstream-double-tap.md) |
 | Ghost text overlay (color/opacity, hint chip, theme-aware) | ✅ |
 | Settings window (sidebar: General / Engine & Model / Writing / Shortcuts / Apps / Advanced / Performance / About) | ✅ |
 | First-run welcome wizard (template cards) | ✅                 |

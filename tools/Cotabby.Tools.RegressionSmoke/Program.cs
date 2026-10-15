@@ -89,11 +89,33 @@ internal static class Program
                 originalClipboard.SetText("original clipboard text");
                 originalClipboard.SetData("Cotabby.Regression.Custom", "custom clipboard payload");
                 Clipboard.SetDataObject(originalClipboard, copy: true);
-                Require(await Task.Run(() => inserter.InsertAsync(target!, "another long completion to exercise clipboard preservation. ", CancellationToken.None)), "clipboard preservation insert refused");
+                const string preservedChunk = "another long completion to exercise clipboard preservation. ";
+                Require(await Task.Run(() => inserter.InsertAsync(target!, preservedChunk, CancellationToken.None)), "clipboard preservation insert refused");
+                expected += preservedChunk;
+                await Task.Delay(180);
+                Require(box.Text == expected, "clipboard preservation case did not paste exact text");
                 Require(Clipboard.GetText() == "original clipboard text"
                     && (string?)Clipboard.GetData("Cotabby.Regression.Custom") == "custom clipboard payload",
                     "production paste destroyed a non-text clipboard format");
                 Console.WriteLine("PRODUCTION_INSERTER_RICH_CLIPBOARD_PRESERVED=PASS");
+                Clipboard.Clear();
+                const string emptyChunk = "long completion with an originally empty clipboard. ";
+                Require(await Task.Run(() => inserter.InsertAsync(target!, emptyChunk, CancellationToken.None)), "empty clipboard insert refused");
+                expected += emptyChunk;
+                await Task.Delay(180);
+                Require(box.Text == expected, "empty clipboard case did not paste exact text");
+                Require(Clipboard.GetDataObject() is not { } empty || empty.GetFormats().Length == 0,
+                    "originally empty clipboard was not restored");
+                Console.WriteLine("PRODUCTION_INSERTER_EMPTY_CLIPBOARD_RESTORED=PASS");
+                using var cancellation = new CancellationTokenSource();
+                box.TextChanged += (_, _) => cancellation.Cancel();
+                const string cancelledChunk = "long paste whose cancellation arrives after dispatch. ";
+                Require(await Task.Run(() => inserter.InsertAsync(target!, cancelledChunk, cancellation.Token)), "dispatched paste was reported as cancelled");
+                expected += cancelledChunk;
+                await Task.Delay(180);
+                Require(cancellation.IsCancellationRequested && box.Text == expected,
+                    "cancellation case did not observe dispatched host text");
+                Console.WriteLine("PRODUCTION_INSERTER_POST_DISPATCH_CANCELLATION_ACCOUNTED=PASS");
                 fixture.Close();
                 overlay.Close();
                 result = 0;

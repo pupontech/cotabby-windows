@@ -30,10 +30,10 @@ Bring high-value, compatible improvements from the original Cotabby project into
 
 | Feature | Upstream source | Windows status |
 | --- | --- | --- |
-| Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Merged (`046d7cf`); Windows live-validated by the owner on a test build, tagged release still pending |
+| Whole-request output reservation | [#851 / `80f46e6`](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868) | Merged (`046d7cf`), shipped in v0.3.0 and retained in v0.4.0; owner smoke-tested the earlier test build |
 | Performance metrics (GPU readouts + request latency; CPU/RAM graphs not ported) | [#858 / `8cdbea2`](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343) | Merged PR #2 (`031ff0f`); 172 tests and post-merge Windows CI passed; owner confirmed tracking/Clear, other live GPU/restart scenarios unconfirmed |
 | Sign-in and verification-field protection | [#848 / `d81d304`](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c) | Merged PR #3 (`8251b7d`); 231 tests, real-UIA credential proof and independent review passed; browser metadata coverage varies |
-| Double-tap Tab acceptance | [#840 / `3ad86f3`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650) | Unreleased global-only opt-in; 274 portable tests pass with 9/9 real-hook CI cases. Exact-diff safety review, settings/edge coverage and Windows runtime proof pending; no merge/tag/release. [Acceptance note](docs/upstream-double-tap.md) |
+| Double-tap Tab acceptance | [#840 / `3ad86f3`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650) | Global-only opt-in for v0.4.0; Windows CI verifies real rendered settings, production insertion and nine synthetic hook/UIA cases. Captured rejected keys are logged, not replayed. Physical keys/live models remain owner-verified. [Acceptance note](docs/upstream-double-tap.md) |
 | Opt-in typing history | [#841 / `c3d17c1`](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428) | Not ported. It would create the first durable on-device store of user text; needs an explicit privacy decision (encryption/key custody, retention, delete-all, Cotypist import provenance) first. |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
