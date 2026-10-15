@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using Cotabby.Core.Focus;
 using Cotabby.Core.Insertion;
 using Microsoft.Extensions.Logging;
@@ -63,8 +64,13 @@ public sealed class SendInputTextInserter : ITextInserter
                 _logger.LogInformation(
                     "Inserter (unicode) {Len} chars: \"{Text}\" target.proc={Proc}",
                     text.Length, EscapeFull(text), target.ProcessName);
-                SendUnicodeString(text);
-                return true;
+                return await Task.Run(() =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (!TargetStillFocused(target)) return false;
+                    SendUnicodeString(text);
+                    return true;
+                }, ct).ConfigureAwait(false);
             }
 
             _logger.LogInformation(
@@ -93,6 +99,7 @@ public sealed class SendInputTextInserter : ITextInserter
                 // Give the host a beat to see the clipboard update before paste.
                 await Task.Delay(15, ct).ConfigureAwait(false);
 
+                if (!await Task.Run(() => TargetStillFocused(target), ct).ConfigureAwait(false)) return false;
                 SendCtrlV();
 
                 // Wait long enough for the host to consume the paste before we
@@ -119,6 +126,25 @@ public sealed class SendInputTextInserter : ITextInserter
         {
             _gate.Release();
         }
+    }
+
+    // Runs off the WPF dispatcher: querying UIA in-process from the UI thread
+    // can deadlock. Do not trust a snapshot across the semaphore/clipboard waits.
+    private static bool TargetStillFocused(FocusedField target)
+    {
+        if (target.IsCredentialField || target.IsSecure
+            || target.ElementHandle is not AutomationElement expected) return false;
+        try
+        {
+            var current = AutomationElement.FocusedElement;
+            if (current is null || current.Current.ProcessId != target.ProcessId
+                || current.Current.IsPassword || !current.Current.HasKeyboardFocus
+                || !Automation.Compare(expected, current)) return false;
+            var foreground = GetForegroundWindow();
+            GetWindowThreadProcessId(foreground, out uint pid);
+            return foreground != IntPtr.Zero && pid == target.ProcessId;
+        }
+        catch (Exception) { return false; }
     }
 
     /// <summary>

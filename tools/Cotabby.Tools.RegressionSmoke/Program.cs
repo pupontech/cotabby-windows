@@ -78,13 +78,22 @@ internal static class Program
                 string expected = box.Text;
                 foreach (var chunk in new[] { "hello ", "world ", "bookkeeper ", "cool ", "... ", "this is a long clipboard-pasted completion with many words. " })
                 {
-                    bool inserted = await Task.Run(() => inserter.InsertAsync(target, chunk, CancellationToken.None));
+                    bool inserted = await Task.Run(() => inserter.InsertAsync(target!, chunk, CancellationToken.None));
                     Require(inserted, "production insertion refused a fixture chunk");
                     expected += chunk;
                     await Task.Delay(180);
                     Require(box.Text == expected, $"production host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}");
                 }
                 Console.WriteLine("PRODUCTION_INSERTER_REAL_HOST_UNICODE_AND_CLIPBOARD_READBACK=PASS");
+                var originalClipboard = new DataObject();
+                originalClipboard.SetText("original clipboard text");
+                originalClipboard.SetData("Cotabby.Regression.Custom", "custom clipboard payload");
+                Clipboard.SetDataObject(originalClipboard, copy: true);
+                Require(await Task.Run(() => inserter.InsertAsync(target!, "another long completion to exercise clipboard preservation. ", CancellationToken.None)), "clipboard preservation insert refused");
+                Require(Clipboard.GetText() == "original clipboard text"
+                    && (string?)Clipboard.GetData("Cotabby.Regression.Custom") == "custom clipboard payload",
+                    "production paste destroyed a non-text clipboard format");
+                Console.WriteLine("PRODUCTION_INSERTER_RICH_CLIPBOARD_PRESERVED=PASS");
                 fixture.Close();
                 overlay.Close();
                 result = 0;
