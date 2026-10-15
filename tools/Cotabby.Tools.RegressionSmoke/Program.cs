@@ -8,6 +8,7 @@ using Cotabby.App.Overlay;
 using Cotabby.App.UI;
 using Cotabby.Core.Focus;
 using Cotabby.Win32.Insertion;
+using Cotabby.Win32.Focus;
 using Microsoft.Extensions.Logging.Abstractions;
 
 internal static class Program
@@ -53,13 +54,27 @@ internal static class Program
                 box.CaretIndex = box.Text.Length;
                 await Task.Delay(200);
                 Require(box.IsKeyboardFocused, "fixture did not receive keyboard focus");
-                var target = new FocusedField
-                {
-                    ElementHandle = box, ProcessId = Environment.ProcessId, ProcessName = "RegressionSmoke",
-                    Text = box.Text, CaretOffset = box.CaretIndex, CaretRect = default, FieldRect = default,
-                    IsSingleLine = false, IsSecure = false, IsCredentialField = false,
-                };
+                using var tracker = new UiaFocusTracker(NullLogger<UiaFocusTracker>.Instance);
+                var target = await Task.Run(() => tracker.Refresh());
+                Require(target is { IsCredentialField: false, StableFieldIdentity: not null }, "fixture has no proven UIA identity");
                 var inserter = new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance);
+                // A stale target must not inject into the new foreground field.
+                var otherBox = new TextBox { Text = "other " };
+                var otherWindow = new Window { Content = otherBox, Width = 400, Height = 200 };
+                otherWindow.Show();
+                otherWindow.Activate();
+                otherBox.Focus();
+                otherBox.CaretIndex = otherBox.Text.Length;
+                await Task.Delay(200);
+                Require(otherBox.IsKeyboardFocused, "second fixture did not receive focus");
+                bool staleInserted = await Task.Run(() => inserter.InsertAsync(target!, "must not land", CancellationToken.None));
+                await Task.Delay(180);
+                Require(!staleInserted && otherBox.Text == "other ", "stale target inserted into a different field");
+                Console.WriteLine("PRODUCTION_INSERTER_STALE_TARGET_REFUSED=PASS");
+                otherWindow.Close();
+                fixture.Activate();
+                box.Focus();
+                await Task.Delay(200);
                 string expected = box.Text;
                 foreach (var chunk in new[] { "hello ", "world ", "bookkeeper ", "cool ", "... ", "this is a long clipboard-pasted completion with many words. " })
                 {
