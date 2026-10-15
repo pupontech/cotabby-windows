@@ -9,8 +9,7 @@ the Windows implementation stable.
 - Windows fork: [pupontech/cotabby-windows](https://github.com/pupontech/cotabby-windows)
 - Windows source port: [Msde-7/cotabby-windows](https://github.com/Msde-7/cotabby-windows)
 - Original macOS project: [FuJacob/cotabby](https://github.com/FuJacob/cotabby)
-- Current Windows baseline: commit `c0a2522` (v0.3.0; base for the #840 port)
-- Windows parent baseline: commit `f0c81ac`
+- Current Windows baseline: commit `8c0bcd2` (v0.5.0; base for the next port round)
 - The original repository has a separate history and must not be merged wholesale into the Windows branch.
 
 ## Objective
@@ -35,6 +34,9 @@ Bring high-value, compatible improvements from the original Cotabby project into
 | Sign-in and verification-field protection | [#848 / `d81d304`](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c) | Merged PR #3 (`8251b7d`); 231 tests, real-UIA credential proof and independent review passed; browser metadata coverage varies |
 | Double-tap Tab acceptance | [#840 / `3ad86f3`](https://github.com/FuJacob/cotabby/commit/3ad86f3ff0c7fa4abe250fde348611f162027650) | Global-only opt-in for v0.4.1; Windows CI verifies real rendered settings, production insertion and nine synthetic hook/UIA cases. Captured rejected keys are logged, not replayed. Physical keys/live models remain owner-verified. [Acceptance note](docs/upstream-double-tap.md) |
 | Opt-in typing history | [#841 / `c3d17c1`](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428) | Not ported. It would create the first durable on-device store of user text; needs an explicit privacy decision (encryption/key custody, retention, delete-all, Cotypist import provenance) first. |
+| Correctable-misspelling completion guard | [#814 / `ac2699e`](https://github.com/FuJacob/cotabby/commit/ac2699e4ab40b68cf7429b7d13d5a7206c99dbbc) | Merged PR #6, shipped in v0.5.0. Pure guard live (junk runs); spelling checks pluggable and dormant until an `ISpellAssessor` is registered. |
+| Low Power Mode pause | [#812 / `d4c4d23`](https://github.com/FuJacob/cotabby/commit/d4c4d23410dc8a720c30725ae63451dad598f525) | Merged PR #6, shipped in v0.5.0. Opt-in General toggle; Windows battery-saver read via `GetSystemPowerStatus`. Real engagement owner-verified. |
+| Held-presentation rapid-Tab acceptance | [#838 / `7724926`](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d) | Merged PR #6, shipped in v0.5.0. Coordinator presentation mark; live rapid-Tab behavior owner-verified. |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
