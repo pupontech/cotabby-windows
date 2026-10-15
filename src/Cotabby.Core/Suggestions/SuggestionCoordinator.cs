@@ -51,6 +51,13 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         bool IsCredentialField,
         long Version);
 
+    /// <summary>Text the overlay was last asked to show but whose Show/Update
+    /// is still crossing the WPF dispatcher. Acceptance consults this so a
+    /// rapid second Tab accepts the tail Cotabby is about to paint (upstream
+    /// #838) instead of tearing the session down when the host has not yet
+    /// published the first insertion.</summary>
+    private volatile string? _heldPresentationText;
+
     private sealed class AcceptIntent(
         long sequence,
         PresentationSnapshot presentation,
@@ -148,6 +155,13 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// settings UI; null/empty disables the check.
     /// </summary>
     public ISet<string>? BlockedApps { get; set; }
+
+    /// <summary>
+    /// When set (App wires the Windows energy-saver reader behind the
+    /// "Pause in Low Power Mode" setting), an active energy-saver state pauses
+    /// new requests. Null disables the check entirely. Mirrors upstream #812.
+    /// </summary>
+    public ILowPowerModeProvider? LowPowerModePause { get; set; }
 
     /// <summary>
     /// Per-request max-token overrides driven by the completion length preset.
@@ -432,6 +446,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             _logger.LogDebug("No focused field at trigger-decision time.");
             return;
         }
+        if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
+        {
+            _logger.LogDebug("Suggestions paused while Windows energy saver is on.");
+            return;
+        }
         if (!SuggestionAvailability.ShouldRequest(field, ev, BlockedApps))
         {
             _logger.LogDebug("ShouldRequest false: secure={Sec} textLen={Len} host={Host} blocked={Blocked}",
@@ -635,6 +654,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         _sessionPid = livePid;
                         _doubleTapAcceptanceState.Reset();
                         PublishSessionSnapshot(_session);
+                        SetHeldPresentation(accumulated);
                         _overlay.Show(accumulated, liveAnchor);
                         overlayShown = true;
                         requestPresented = true;
@@ -651,8 +671,12 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             IsComplete = chunk.IsFinal,
                         };
                         PublishSessionSnapshot(_session);
-                        if (overlayShown) _overlay.Update(accumulated);
-                        else { _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
+                        if (overlayShown)
+                        {
+                            SetHeldPresentation(accumulated);
+                            _overlay.Update(accumulated);
+                        }
+                        else { SetHeldPresentation(accumulated); _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
                         requestPresented = true;
                         _logger.LogInformation(
                             "Overlay updated req={ReqId} text=\"{Text}\" hex={Hex}",
@@ -925,6 +949,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             return AcceptanceIntentStatus.IntentInvalidated;
         }
 
+        // Upstream #838: while the overlay's next present is still crossing the
+        // WPF dispatcher, the published snapshot may lag behind the accepted
+        // tail. The held text is Cotabby's own offer for this session, so it
+        // authorizes acceptance exactly as a painted ghost would; any other
+        // mismatch between live state and the intent remains a refusal.
+        string? held = _heldPresentationText;
+        if (held is { Length: > 0 }
+            && intent.Presentation.RequestId == session.RequestId
+            && intent.Presentation.VisibleText.Length > held.Length
+            && intent.Presentation.VisibleText.EndsWith(held, StringComparison.Ordinal)
+            && held.Length >= visible.Length)
+        {
+            visible = held;
+        }
+
         string chunk = whole
             ? visible
             : AcceptanceGranularity == "phrase"
@@ -1023,6 +1062,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     };
                     PublishSessionSnapshot(_session);
                     _overlay.Update(liveRemaining);
+                    _heldPresentationText = null;
                     if (armDoubleTap)
                     {
                         _doubleTapAcceptanceState.RecordWordAccept(sessionToken, intent.EventTimeSeconds);
@@ -1046,6 +1086,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 };
                 PublishSessionSnapshot(_session);
                 _overlay.Update(remaining);
+                _heldPresentationText = null;
                 if (armDoubleTap)
                 {
                     _doubleTapAcceptanceState.RecordWordAccept(sessionToken, intent.EventTimeSeconds);
@@ -1153,7 +1194,9 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 {
                     _session = live with { AnchorRect = after.CaretRect };
                     PublishSessionSnapshot(_session);
+                    _heldPresentationText = live.VisibleText;
                     _overlay.Show(live.VisibleText, after.CaretRect);
+                    _heldPresentationText = null;
                 }
             }
             else if (exhausted && _enabled && _session is null)
@@ -1174,6 +1217,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _generationInFlight = false;
         _inFlightPid = 0;
         _inFlightRequestId = null;
+        _heldPresentationText = null;
         PublishSessionSnapshot(null);
         _overlay.Hide();
         _work.Cancel();
@@ -1199,6 +1243,18 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         Volatile.Write(ref _presentation, presentation);
 
 
+    }
+
+    /// <summary>
+    /// Marks <paramref name="text"/> as Cotabby's own in-flight presentation for
+    /// the acceptance check that runs while the overlay call is still crossing
+    /// the WPF dispatcher. Upstream #838: while a present is held, the published
+    /// state keeps describing the previous tail, so a rapid follow-up Tab
+    /// consults the held text before refusing to accept.
+    /// </summary>
+    private void SetHeldPresentation(string text)
+    {
+        _heldPresentationText = text;
     }
 
     private static string Preview(string s) => s.Length <= 40 ? s : s[..40] + "…";

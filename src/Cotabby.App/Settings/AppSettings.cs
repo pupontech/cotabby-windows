@@ -82,6 +82,13 @@ public sealed class AppSettings
     public bool EmojiPickerEnabled { get; set; } = true;
 
     /// <summary>
+    /// Pause suggestions while Windows energy saver (Low Power Mode) is on.
+    /// Mirrors upstream's "Pause in Low Power Mode": off by default, evaluated
+    /// at every keystroke together with the other availability gates.
+    /// </summary>
+    public bool PauseInLowPowerMode { get; set; }
+
+    /// <summary>
     /// Opt-in performance log. Mirrors upstream's "Enable Performance
     /// Tracking": off by default, records the timestamp, model and elapsed time
     /// of every suggestion request that produced text, and retains only the

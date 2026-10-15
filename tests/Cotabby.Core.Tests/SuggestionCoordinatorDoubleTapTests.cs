@@ -507,7 +507,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         ForegroundWindowHandle = 1234,
     };
 
-    private sealed class ManualClock
+    internal sealed class ManualClock
     {
         public double Now { get; set; } = 100;
     }
@@ -515,7 +515,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     /// <summary>Logger that forwards every entry and can be armed to throw on a
     /// chosen message, so a test can drive a fault out of the acceptance queue
     /// processor's own error logging.</summary>
-    private sealed class FaultingLogger : ILogger<SuggestionCoordinator>
+    internal sealed class FaultingLogger : ILogger<SuggestionCoordinator>
     {
         private Func<string, bool>? _throwOn;
         public ConcurrentQueue<(LogLevel Level, string Message)> Messages { get; } = new();
@@ -545,7 +545,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         }
     }
 
-    private sealed class Rig : IAsyncDisposable
+    internal sealed class Rig : IAsyncDisposable
     {
         public QueuedSynchronizationContext Ui { get; } = new();
         public TestKeyboardHook Hook { get; } = new();
@@ -642,7 +642,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         }
     }
 
-    private sealed class TestSuggestionEngine : ISuggestionEngine
+    internal sealed class TestSuggestionEngine : ISuggestionEngine
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -658,7 +658,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         }
     }
 
-    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    internal sealed class QueuedSynchronizationContext : SynchronizationContext
     {
         private readonly object _gate = new();
         private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
@@ -722,7 +722,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class TestKeyboardHook : IKeyboardHook
+    internal sealed class TestKeyboardHook : IKeyboardHook
     {
         private SynchronizationContext? _uiContext;
         public event EventHandler<KeyEventArgs>? KeyEvent;
@@ -748,7 +748,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         }
     }
 
-    private sealed class TestFocusTracker : IFocusTracker
+    internal sealed class TestFocusTracker : IFocusTracker
     {
         private FocusedField _field = new()
         {
@@ -784,7 +784,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public void ApplyInsertion(string text) => HostText += text;
     }
 
-    private sealed class TestOverlay : IOverlayPresenter
+    internal sealed class TestOverlay : IOverlayPresenter
     {
         public string? Text { get; private set; }
         public bool IsVisible => Text is not null;
@@ -805,7 +805,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public void Hide() => Text = null;
     }
 
-    private sealed class TestTextInserter : ITextInserter
+    internal sealed class TestTextInserter : ITextInserter
     {
         private readonly TestFocusTracker _focus;
         private readonly object _gate = new();
@@ -873,7 +873,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         }
     }
 
-    private sealed class InsertGate
+    internal sealed class InsertGate
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         /// <summary>
