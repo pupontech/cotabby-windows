@@ -77,54 +77,44 @@ public sealed class SendInputTextInserter : ITextInserter
                 "Inserter (clipboard paste) received {Len} chars: \"{Text}\" hex={Hex} target.pid={Pid} target.proc={Proc}",
                 text.Length, EscapeFull(text), HexDump(text), target.ProcessId, target.ProcessName);
 
-            // BlockInput keeps physical keystrokes from interleaving with the
-            // synthetic Ctrl+V we're about to send. ~50ms blocked total.
-            bool blocked = BlockInput(true);
-            string? savedClipboard = null;
-            try
-            {
-                // Snapshot existing clipboard so the round-trip is invisible.
-                // STA is required for OLE clipboard ops — InsertAsync is called
-                // from the UI thread in normal operation, but we go through the
-                // dispatcher explicitly to be safe.
-                savedClipboard = await OnStaThreadAsync(TryReadClipboardText).ConfigureAwait(false);
-
-                bool wrote = await OnStaThreadAsync(() => TryWriteClipboardText(text)).ConfigureAwait(false);
-                if (!wrote)
-                {
-                    _logger.LogWarning("Clipboard write failed; cannot paste.");
-                    return false;
-                }
-
-                // Give the host a beat to see the clipboard update before paste.
-                await Task.Delay(15, ct).ConfigureAwait(false);
-
-                if (!await Task.Run(() => TargetStillFocused(target), ct).ConfigureAwait(false)) return false;
-                SendCtrlV();
-
-                // Wait long enough for the host to consume the paste before we
-                // restore the clipboard. 80ms covers Notepad and Electron paste
-                // pipelines comfortably.
-                await Task.Delay(80, ct).ConfigureAwait(false);
-            }
-            finally
-            {
-                // Restore prior clipboard contents (or clear if nothing was
-                // there originally). Always do this even if paste failed so we
-                // don't leave the user's clipboard pointing at our suggestion.
-                if (savedClipboard is not null)
-                {
-                    try { await OnStaThreadAsync(() => TryWriteClipboardText(savedClipboard)).ConfigureAwait(false); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "Clipboard restore failed."); }
-                }
-                if (blocked) BlockInput(false);
-            }
-
-            return true;
+            return await OnStaThreadAsync(() => PasteOnStaThread(target, text, ct)).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private bool PasteOnStaThread(FocusedField target, string text, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!TargetStillFocused(target)) return false;
+        string? savedClipboard = TryReadClipboardText();
+        if (!TryWriteClipboardText(text)) return false;
+        try
+        {
+            Thread.Sleep(15);
+            ct.ThrowIfCancellationRequested();
+            if (!TargetStillFocused(target)) return false;
+            // Block, inject and unblock on ONE native thread. An await here can
+            // move injection to a thread whose input Windows is still blocking.
+            bool blocked = BlockInput(true);
+            try
+            {
+                SendCtrlV();
+                // Dispatch is irreversible. Cancellation after this point must
+                // not turn a sent paste into a reported refusal or skip cleanup.
+                Thread.Sleep(80);
+                return true;
+            }
+            finally
+            {
+                if (blocked) BlockInput(false);
+            }
+        }
+        finally
+        {
+            if (savedClipboard is not null) TryWriteClipboardText(savedClipboard);
         }
     }
 
