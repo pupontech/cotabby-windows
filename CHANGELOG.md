@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Prevent a retiring acceptance processor from draining a replacement queue started by a completion callback or concurrent keypress; queued recovery keys keep their own processor and spacing.
+- Recheck field/process/credential ownership before the first overlay chunk, even when a focus-change notification has not arrived.
 - Revalidate the actual focused UIA element and foreground process at production insertion dispatch; a stale target cannot intentionally direct text into the newly focused field.
 - Keep input blocking, clipboard paste and unblocking on one STA thread instead of crossing async continuations, which could silently lose long completions or leave input blocked.
 - Preserve non-text clipboard formats, restore an originally empty clipboard, and avoid replacing a clipboard changed by another application. If a format cannot be copied, refuse long insertion before modifying it.

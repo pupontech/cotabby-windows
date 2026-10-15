@@ -12,6 +12,26 @@ namespace Cotabby.Core.Tests;
 
 public sealed class SuggestionCoordinatorDoubleTapTests
 {
+    [Theory]
+    [InlineData("credential")]
+    [InlineData("other-field")]
+    [InlineData("other-process")]
+    public async Task ChangedFocusBeforeFirstChunkDoesNotPresentPriorFieldSuggestion(string change)
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true, showSuggestion: false);
+        rig.Hook.Emit(Character('x'));
+        await rig.Engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (change == "credential") rig.Focus.MakeCredentialField();
+        else if (change == "other-field") rig.Focus.MoveToAnotherField();
+        else rig.Focus.MoveToAnotherProcess();
+        rig.Engine.Release.TrySetResult();
+        await rig.Ui.WaitForPendingAtLeastAsync(1);
+        rig.Ui.DrainAll();
+        Assert.False(rig.Overlay.IsVisible);
+        Assert.False(rig.Hook.Emit(Tab()));
+        Assert.Empty(rig.Inserter.Inserted);
+    }
+
     [Fact]
     public async Task RefusedCapturedKeyIsLoggedWithoutAnyDispositionSubscriber()
     {
@@ -394,6 +414,41 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
         Assert.Equal(new[] { "world", " again" }, rig.Inserter.Inserted);
         Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+    }
+
+    [Fact]
+    public async Task RetiringProcessorDoesNotDrainAReentrantReplacementQueue()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var failedHead = rig.Inserter.DelayNext();
+        var recoveryHead = rig.Inserter.DelayNext();
+        var replacementQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var suppressions = new ConcurrentQueue<bool>();
+        rig.Coordinator.AcceptanceIntentCompleted += outcome =>
+        {
+            if (outcome.Status != AcceptanceIntentStatus.BlockedByEarlierFailure) return;
+            // Completion observers may enqueue new work after the failed queue
+            // releases ownership, but before that old processor's finally runs.
+            suppressions.Enqueue(rig.Hook.Emit(Tab()));
+            suppressions.Enqueue(rig.Hook.Emit(Tab()));
+            replacementQueued.TrySetResult();
+        };
+        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.True(rig.Hook.Emit(Tab()));
+        failedHead.Release(false);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!replacementQueued.Task.IsCompleted)
+        {
+            rig.Ui.DrainAll();
+            await Task.Delay(5, timeout.Token);
+        }
+        // Let the failed processor retire before the replacement insertion lands.
+        await Task.Delay(30);
+        recoveryHead.Release(true);
+        await rig.WaitForOutcomesAsync(4);
+        Assert.Equal(new[] { true, true }, suppressions);
+        Assert.DoesNotContain(rig.Outcomes, outcome => outcome.Status == AcceptanceIntentStatus.QueueFaulted);
+        Assert.Equal("Hello world again tomorrow today", rig.Focus.HostText);
     }
 
     [Fact]

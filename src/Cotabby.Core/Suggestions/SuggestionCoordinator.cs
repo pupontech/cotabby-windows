@@ -81,6 +81,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private readonly ConcurrentDictionary<long, AcceptIntent> _outstandingAcceptanceIntents = new();
     private readonly CancellationTokenSource _acceptanceLifetime = new();
     private bool _acceptanceQueueRunning;
+    private long _acceptanceProcessorGeneration;
     private long _nextAcceptIntentSequence;
     private readonly DoubleTapAcceptanceState _doubleTapAcceptanceState = new();
     private readonly Func<double> _doubleTapUptimeProvider;
@@ -601,15 +602,17 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             return;
                         }
 
-                        // Re-read the live caret to anchor the overlay where
-                        // the user *is*. The work CTS is already cancelled by
-                        // OnFocusChanged if the user Alt-Tabbed away, so we
-                        // don't double-check the PID here — the
-                        // ctSnapshot.IsCancellationRequested guard above
-                        // covers that. Trying to be too strict here was
-                        // dropping legitimate completions when UIA returned a
-                        // null or zero-rect for a frame.
+                        // Focus notifications can lag or be missing entirely.
+                        // Revalidate the target before presenting the old field's
+                        // completion, not only later when the user accepts it.
                         var live = _focus.Refresh();
+                        if (live is { } focused
+                            && (focused.IsCredentialField || focused.ProcessId != field.ProcessId
+                                || !FieldIdentityProvesOwnership(focused.StableFieldIdentity, field.StableFieldIdentity)))
+                        {
+                            CancelSession("focus changed before presentation");
+                            return;
+                        }
                         var liveAnchor = (live is not null && !live.CaretRect.IsEmpty)
                             ? live.CaretRect : anchor;
                         int livePid = live?.ProcessId ?? field.ProcessId;
@@ -727,6 +730,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void EnqueueAcceptIntent(AcceptIntent intent)
     {
         bool startProcessor = false;
+        long processorGeneration = 0;
         bool disposed;
         lock (_acceptanceGate)
         {
@@ -737,6 +741,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 if (!_acceptanceQueueRunning)
                 {
                     _acceptanceQueueRunning = true;
+                    processorGeneration = ++_acceptanceProcessorGeneration;
                     startProcessor = true;
                 }
             }
@@ -748,11 +753,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         }
         else if (startProcessor)
         {
-            _ = ProcessAcceptanceQueueAsync().ContinueWith(LogFault, TaskScheduler.Default);
+            _ = ProcessAcceptanceQueueAsync(processorGeneration).ContinueWith(LogFault, TaskScheduler.Default);
         }
     }
 
-    private async Task ProcessAcceptanceQueueAsync()
+    private async Task ProcessAcceptanceQueueAsync(long processorGeneration)
     {
         AcceptIntent? inFlight = null;
         try
@@ -805,8 +810,15 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             List<AcceptIntent> leftover;
             lock (_acceptanceGate)
             {
-                _acceptanceQueueRunning = false;
-                leftover = DrainAcceptanceQueueLocked();
+                // A completion observer or another thread can start a new
+                // processor after this one released the running flag. Its queue
+                // is not ours to drain or mark idle during retirement.
+                if (_acceptanceProcessorGeneration == processorGeneration)
+                {
+                    _acceptanceQueueRunning = false;
+                    leftover = DrainAcceptanceQueueLocked();
+                }
+                else leftover = new List<AcceptIntent>();
             }
             if (inFlight is not null) CompleteAcceptanceIntent(inFlight, AcceptanceIntentStatus.QueueFaulted);
             foreach (var intent in leftover) CompleteAcceptanceIntent(intent, AcceptanceIntentStatus.QueueFaulted);
