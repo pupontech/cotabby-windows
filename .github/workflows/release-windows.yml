@@ -112,6 +112,7 @@ jobs:
             ('TestsPassed=' + $counts.passed)
             'LiveModelInference=Not tested by CI; owner validation required'
           ) | Set-Content -LiteralPath (Join-Path $root BUILD-INFO.txt) -Encoding utf8
+          Copy-Item docs/upstream-download-safety.md (Join-Path $root DOWNLOAD-SAFETY-NOTES.md)
           Copy-Item docs/upstream-output-budget.md (Join-Path $root OUTPUT-BUDGET-NOTES.md)
           Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
           Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)

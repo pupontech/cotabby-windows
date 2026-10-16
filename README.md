@@ -1,6 +1,6 @@
 # Cotabby for Windows
 
-**Current release: v0.5.0** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
+**Current release: v0.5.1** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
 in [`VERSION`](VERSION) and is stamped into the shipped build).
 
 Local AI autocomplete for Windows. A system-wide ghost-text suggestion engine that
@@ -44,6 +44,9 @@ suggestions on `Tab`. This port replaces that stack with WPF, UI Automation (UIA
   admin is required.
 - **Customizable ghost text** — the upstream color preset palette, opacity slider,
   optional `Tab` hint chip; automatic light/dark theme follow.
+- **Checked model downloads** — selective Windows-upstream port: validated range
+  resumption, GGUF signature checks and no promotion of incomplete responses.
+  See [scope and testing](docs/upstream-download-safety.md).
 - **All inference local** — llama.cpp via LLamaSharp; no network calls except the
   one-time model download from Hugging Face. No telemetry.
 

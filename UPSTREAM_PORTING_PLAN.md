@@ -55,6 +55,16 @@ counter adapter is fully best-effort (an unavailable counter set shows as
 matching upstream. Live GPU numbers and per-adapter behaviour remain owner
 gated.
 
+## Selective Windows-source updates
+
+The Windows parent advanced to `b1e4031c70aca1be21aae2c57b138fde5fc22bb1`.
+For v0.5.1, only model-download hardening from `e625947` is adapted, with
+stricter range/416 validation and retained cache-size tolerance. See
+[scope, acceptance and rollback](docs/upstream-download-safety.md).
+Cloud endpoints, clipboard context, typing history and the broad UI/coordinator
+rewrite are deliberately excluded under this fork's local-only/privacy policy.
+This is a selective port, not a full merge of the Windows parent's history.
+
 ## Explicit non-goals
 
 - Do not merge `FuJacob/cotabby` wholesale.
