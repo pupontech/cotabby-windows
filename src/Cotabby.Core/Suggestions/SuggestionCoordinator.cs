@@ -659,8 +659,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         overlayShown = true;
                         requestPresented = true;
                         _logger.LogInformation(
-                            "Overlay shown req={ReqId} text=\"{Text}\" hex={Hex} anchor={X},{Y}",
-                            reqId, EscapeFull(accumulated), HexDump(accumulated),
+                            "Overlay shown req={ReqId} chars={Chars} anchor={X},{Y}",
+                            reqId, accumulated.Length,
                             (int)liveAnchor.X, (int)liveAnchor.Y);
                     }
                     else
@@ -679,8 +679,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         else { SetHeldPresentation(accumulated); _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
                         requestPresented = true;
                         _logger.LogInformation(
-                            "Overlay updated req={ReqId} text=\"{Text}\" hex={Hex}",
-                            reqId, EscapeFull(accumulated), HexDump(accumulated));
+                            "Overlay updated req={ReqId} chars={Chars}",
+                            reqId, accumulated.Length);
                     }
 
                     RecordLatencyIfReady();
@@ -1281,51 +1281,6 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void SetHeldPresentation(string text)
     {
         _heldPresentationText = text;
-    }
-
-    private static string Preview(string s) => s.Length <= 40 ? s : s[..40] + "…";
-
-    /// <summary>
-    /// Escape control chars and newlines so a single-line log entry shows the
-    /// FULL string verbatim. Used by the detailed-monitoring path so we can
-    /// reconstruct exactly what the engine produced vs what the inserter sent
-    /// vs what the host received.
-    /// </summary>
-    private static string EscapeFull(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return s;
-        var sb = new System.Text.StringBuilder(s.Length + 8);
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                case '"':  sb.Append("\\\""); break;
-                case '\\': sb.Append("\\\\"); break;
-                default:
-                    if (c < 0x20 || c == 0x7F) sb.Append($"\\x{(int)c:X2}");
-                    else sb.Append(c);
-                    break;
-            }
-        }
-        return sb.ToString();
-    }
-
-    /// <summary>UTF-16 hex dump of <paramref name="s"/>. Lets us spot doubled
-    /// chars, invisible whitespace, or off-by-one differences between snapshot
-    /// and inserter at a glance.</summary>
-    private static string HexDump(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "";
-        var sb = new System.Text.StringBuilder(s.Length * 5);
-        for (int i = 0; i < s.Length; i++)
-        {
-            if (i > 0) sb.Append(' ');
-            sb.Append(((int)s[i]).ToString("X4"));
-        }
-        return sb.ToString();
     }
 
     /// <summary>True if the tail of <paramref name="s"/> ends with 5+ identical
