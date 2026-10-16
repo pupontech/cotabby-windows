@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.1 — 2026-10-16
+
+### Fixed
+
+- Selectively port model-download hardening from Windows upstream
+  [Msde-7/cotabby-windows e625947](https://github.com/Msde-7/cotabby-windows/commit/e625947):
+  restart rather than append when a server ignores HTTP Range; reject truncated
+  responses and non-GGUF downloads; replace invalid existing final files.
+- Validate 206 Content-Range offsets and total length before resuming. Promote a
+  416 partial only when the server's explicit total equals the local file size.
+- Remove download error-body and redirected-URL logging.
+
+### Scope and verification
+
+- 14 deterministic downloader cases supplement the existing 319 tests. Hosted
+  Windows workflows also build, publish and exercise existing synthetic runtime
+  proofs. See [download safety notes](docs/upstream-download-safety.md).
+- No cloud endpoint, clipboard-context, typing-history or UI rewrite imported.
+  All earlier v0.5.0 behavior remains.
+- GGUF magic and size checks are sanity checks, not cryptographic validation.
+  Existing caches retain the historical 85% size tolerance. A changed remote
+  model during resumption cannot be detected without a trusted checksum/validator.
+  Live Hugging Face downloads and real-model suggestions need owner testing.
+
 ## 0.5.0 — 2026-10-15
 
 Upstream port round three from FuJacob/cotabby, merged into main as PR #6 and
