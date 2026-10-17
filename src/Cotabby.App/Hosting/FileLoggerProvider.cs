@@ -21,7 +21,9 @@ public sealed class FileLoggerProvider : ILoggerProvider
     {
         _path = path;
         _minimumLevel = minimumLevel ?? (() => LogLevel.Information);
-        _maxBytes = Math.Clamp(maxBytes, 256, 64 * 1024 * 1024);
+        // A hand-edited zero/negative cap must not silently shrink the log to
+        // nothing; fall back to the shipped default instead.
+        _maxBytes = maxBytes <= 0 ? 8 * 1024 * 1024 : Math.Clamp(maxBytes, 256, 64 * 1024 * 1024);
         _maxFiles = Math.Clamp(maxFiles, 1, 10);
         try
         {

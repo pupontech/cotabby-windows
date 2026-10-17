@@ -168,9 +168,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     public int BatteryThresholdPercent { get; set; } = 40;
     public TimeSpan? RequestDebounce { get; set; }
     private Cotabby.Core.Support.InferencePosture _batteryPosture;
-    public Cotabby.Core.Support.InferencePosture BatteryPosture => _batteryPosture =
-        Cotabby.Core.Support.BatteryPolicy.Evaluate(PowerProvider?.Snapshot ?? default,
-            BatteryAwareInference, BatteryThresholdPercent, _batteryPosture);
+    private readonly object _batteryGate = new();
+    /// <summary>Current posture. Hysteresis state is shared by the hook thread and
+    /// the settings UI, so the read-modify-write is serialized.</summary>
+    public Cotabby.Core.Support.InferencePosture BatteryPosture
+    {
+        get
+        {
+            lock (_batteryGate)
+            {
+                return _batteryPosture = Cotabby.Core.Support.BatteryPolicy.Evaluate(
+                    PowerProvider?.Snapshot ?? default, BatteryAwareInference,
+                    BatteryThresholdPercent, _batteryPosture);
+            }
+        }
+    }
 
     /// <summary>
     /// Per-request max-token overrides driven by the completion length preset.

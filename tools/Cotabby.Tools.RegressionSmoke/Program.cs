@@ -71,9 +71,8 @@ internal static class Program
                 Require(host.Statistics.Enabled && host.SettingsStore.Load().EnableSuggestionStatistics,
                     "statistics toggle not wired/persisted");
                 host.Statistics.Record(Cotabby.Core.Suggestions.SuggestionStatistic.Triggered);
-                var clearButton = settings.FindName("SuggestionStatsToggle") is not null
-                    ? FindAll<Button>(settings).Single(button => button.Content as string == "Clear statistics")
-                    : throw new InvalidOperationException("statistics UI is missing");
+                var clearButton = (Button?)settings.FindName("SuggestionStatsClearButton")
+                    ?? throw new InvalidOperationException("statistics clear button is missing");
                 clearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Require(host.Statistics.Snapshot().Values.All(count => count == 0), "statistics UI clear failed");
                 statsToggle.IsChecked = false;
