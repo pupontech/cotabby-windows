@@ -1,6 +1,6 @@
 # Cotabby for Windows
 
-**Current release: v0.4.1** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
+**Current release: v0.5.1** (see [`CHANGELOG.md`](CHANGELOG.md); the version lives
 in [`VERSION`](VERSION) and is stamped into the shipped build).
 
 Local AI autocomplete for Windows. A system-wide ghost-text suggestion engine that
@@ -44,6 +44,9 @@ suggestions on `Tab`. This port replaces that stack with WPF, UI Automation (UIA
   admin is required.
 - **Customizable ghost text** — the upstream color preset palette, opacity slider,
   optional `Tab` hint chip; automatic light/dark theme follow.
+- **Checked model downloads** — selective Windows-upstream port: validated range
+  resumption, GGUF signature checks and no promotion of incomplete responses.
+  See [scope and testing](docs/upstream-download-safety.md).
 - **All inference local** — llama.cpp via LLamaSharp; no network calls except the
   one-time model download from Hugging Face. No telemetry.
 
@@ -157,6 +160,9 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Whole-request output reservation ([upstream #851](https://github.com/FuJacob/cotabby/commit/80f46e64c7a25c11f3f035c3db697612a7e4e868)) | ✅ (live-validated by the owner on the `bb3469f` test build) |
 | Performance pane: live GPU readouts + opt-in request latency (partial port; no CPU/RAM graphs) ([upstream #858](https://github.com/FuJacob/cotabby/commit/8cdbea2d2619b0f89a73d46eb0bb856504d07343)) | Merged; Windows CI passed, owner confirmed tracking/Clear; physical GPU accuracy remains unconfirmed |
 | Sign-in and verification fields left alone ([upstream #848](https://github.com/FuJacob/cotabby/commit/d81d304f1ea0a5b4bb5feff9b71407ebee56b13c)) | ✅ metadata-based (password flag, accessible label, automation id, address shape); browser metadata coverage varies, not full DOM parity |
+| Correctable-misspelling completion guard ([upstream #814](https://github.com/FuJacob/cotabby/commit/ac2699e4ab40b68cf7429b7d13d5a7206c99dbbc)) | ✅ pure guard live for junk punctuation runs; seam/leading-word spelling checks pluggable (`ISpellAssessor`), dormant until a backend is registered. [Scope](docs/upstream-seam-guard.md) |
+| Low Power Mode pause ([upstream #812](https://github.com/FuJacob/cotabby/commit/d4c4d23410dc8a720c30725ae63451dad598f525)) | ✅ opt-in Settings → General toggle; Windows energy saver read via `GetSystemPowerStatus`. [Scope](docs/upstream-low-power-mode.md) |
+| Held-presentation rapid-Tab acceptance ([upstream #838](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d)) | ✅ coordinator presentation mark authorizes the rapid second Tab. [Scope](docs/upstream-rapid-tab.md) |
 | Opt-in typing history ([upstream #841](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428)) | ❌ deliberately not ported; storing user text on disk needs a separate privacy decision |
 | Constrained greedy decode (top-20 argmax, no-repeat-3-gram, sentence stops) | ✅ |
 | One-shot output normalizer (echo strip, dup filter, safety gate) | ✅ |

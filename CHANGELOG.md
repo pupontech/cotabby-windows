@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.5.1 — 2026-10-16
+
+### Fixed
+
+- Selectively port model-download hardening from Windows upstream
+  [Msde-7/cotabby-windows e625947](https://github.com/Msde-7/cotabby-windows/commit/e625947):
+  restart rather than append when a server ignores HTTP Range; reject truncated
+  responses and non-GGUF downloads; replace invalid existing final files.
+- Validate 206 Content-Range offsets and total length before resuming. Promote a
+  416 partial only when the server's explicit total equals the local file size.
+- Remove download error-body and redirected-URL logging.
+
+### Scope and verification
+
+- 14 deterministic downloader cases supplement the existing 319 tests. Hosted
+  Windows workflows also build, publish and exercise existing synthetic runtime
+  proofs. See [download safety notes](docs/upstream-download-safety.md).
+- No cloud endpoint, clipboard-context, typing-history or UI rewrite imported.
+  All earlier v0.5.0 behavior remains.
+- GGUF magic and size checks are sanity checks, not cryptographic validation.
+  Existing caches retain the historical 85% size tolerance. A changed remote
+  model during resumption cannot be detected without a trusted checksum/validator.
+  Live Hugging Face downloads and real-model suggestions need owner testing.
+
+## 0.5.0 — 2026-10-15
+
+Upstream port round three from FuJacob/cotabby, merged into main as PR #6 and
+shipped cumulatively with all five earlier ports.
+
+### Added
+
+- Port upstream [correctable-misspelling guard ([#814](https://github.com/FuJacob/cotabby/commit/ac2699e4ab40b68cf7429b7d13d5a7206c99dbbc))](docs/upstream-seam-guard.md):
+  a pure post-generation `CompletionSeamGuard` now refuses three classes of
+  visible glitch before display — junk punctuation runs ("....", "$$$$"),
+  mid-word splices that turn the word being typed into a misspelling
+  ("gre" + "atful"), and, when the completion starts a new word, a first word
+  the spell backend can actually correct. The leading-word check is
+  intentionally fail-open: names, jargon and model vocabulary without a
+  replacement pass through. Windows registers no always-on spell checker
+  equivalent, so the check is pluggable (`ISpellAssessor`); without one the
+  guard stays at its pure junk-run rule and behavior is unchanged beyond junk
+  runs. Spelling checks skip capitalized words, short joins, tokens with
+  digits, and CJK text.
+- Port upstream [Low Power Mode pause ([#812](https://github.com/FuJacob/cotabby/commit/d4c4d23410dc8a720c30725ae63451dad598f525))](docs/upstream-low-power-mode.md):
+  a new opt-in **Pause in Low Power Mode** toggle in Settings → General.
+  When enabled, new suggestion requests pause while the Windows energy saver
+  is engaged (read via `GetSystemPowerStatus`, one cheap cached poll per
+  evaluation, never throws). Off by default, matching upstream.
+- Port upstream [held-presentation rapid-Tab acceptance ([#838](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d))](docs/upstream-rapid-tab.md):
+  while Cotabby's next overlay presentation is still in flight, a rapid
+  follow-up Tab now accepts the tail Cotabby is about to paint instead of
+  failing the stale-ghost check, tearing the session down, and leaking a real
+  Tab into the host (which used to move focus to the page's next control).
+
+### Fixed
+
+- Preserve all earlier ports: full output-budget reservation (#851), partial
+  GPU/request Performance pane (#858), credential-field protection (#848),
+  opt-in double-tap acceptance (#840), and the cumulative insertion,
+  clipboard, BlockInput and privacy regressions fixed on Windows in v0.3.0–
+  v0.4.1.
+
+### Verification
+
+- 319 unit tests locally (281 baseline + 38 new: 31 seam-guard, 3 Low Power
+  Mode, 2 rapid-Tab rig cases) and hosted Windows CI.
+- Two timing-sensitive pre-existing tests flaked once on hosted CI and passed
+  on rerun and deterministically in 30+ local runs; they are not related to
+  this change set and are unchanged from v0.4.1.
+
+### Known limits
+
+- Physical keys, live-model suggestions, per-application accessibility, GPU
+  accuracy and the real energy-saver engagement path remain owner-verified;
+  CI uses synthetic input and a deterministic engine. The spell backend is
+  not registered on Windows yet, so the new leading/seam checks only act when
+  an `ISpellAssessor` is injected.
+- Rejected captured keys are still not replayed; warnings make this visible
+  without logging content.
+
 ## 0.4.1 — 2026-10-15
 
 The v0.4.0 tag build was cancelled before publication when the final privacy
