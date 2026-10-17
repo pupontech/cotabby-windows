@@ -164,6 +164,10 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Low Power Mode pause ([upstream #812](https://github.com/FuJacob/cotabby/commit/d4c4d23410dc8a720c30725ae63451dad598f525)) | ✅ opt-in Settings → General toggle; Windows energy saver read via `GetSystemPowerStatus`. [Scope](docs/upstream-low-power-mode.md) |
 | Held-presentation rapid-Tab acceptance ([upstream #838](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d)) | ✅ coordinator presentation mark authorizes the rapid second Tab. [Scope](docs/upstream-rapid-tab.md) |
 | Opt-in typing history ([upstream #841](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428)) | ❌ deliberately not ported; storing user text on disk needs a separate privacy decision |
+| Bounded, sanitized diagnostics with live verbosity (TabType Phase 1) | ✅ 8 MiB × 3 rotation, always-on secret redaction on every sink, Information/Debug/Warning/Error control. [Scope](docs/tabtype-phase1.md) |
+| Extra field protection: password-manager defaults + transient mixed-character pause (TabType Phase 1) | ⚠️ opt-in, off by default. Conservative heuristics, not password detection; browser metadata coverage still varies. [Scope](docs/tabtype-phase1.md) |
+| Battery-aware inference posture (TabType Phase 1) | ⚠️ opt-in, off by default. Throttle/defer with hysteresis; unknown power resolves normal. Real battery transitions owner-verified. [Scope](docs/tabtype-phase1.md) |
+| Count-only suggestion statistics (TabType Phase 1) | ⚠️ opt-in, off by default, in-memory per session. No text, identifiers, timestamps or files. [Scope](docs/tabtype-phase1.md) |
 | Constrained greedy decode (top-20 argmax, no-repeat-3-gram, sentence stops) | ✅ |
 | One-shot output normalizer (echo strip, dup filter, safety gate) | ✅ |
 | Fill-in-middle for mid-line carets | ✅ (Qwen3.5 models)       |

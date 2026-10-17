@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.6.0 — 2026-10-17
+
+TabType Phase 1 (from this fork's own `openspec/audit/` plan), ported onto the
+Windows architecture. [Scope and limits](docs/tabtype-phase1.md).
+
+### Added
+
+- **Bounded, sanitized diagnostics.** `C:\tmp\cotabby-live.log` rotates at
+  8 MiB and keeps three backups; every file, console and debugger line is
+  passed through the secret sanitizer; verbosity (Information / Debug /
+  Warning / Error) is a live setting in Advanced. Rotation, an unwritable
+  path and oversized records all fail soft.
+- **Extra field protection** (opt-in, Settings → Apps): exact
+  password-manager process defaults (1Password, KeePass, KeePassXC,
+  Bitwarden, Enpass, Dashlane), a transient mixed-character pause in plain
+  single-line fields, and four more credential labels.
+- **Battery-aware inference** (opt-in, Settings → Advanced): throttles
+  debounce and completion budget on battery, defers new requests below the
+  configurable threshold with hysteresis, and resolves to normal behavior for
+  AC, charging, desktops and unreadable power state.
+- **Suggestion statistics** (opt-in, Settings → Performance): in-memory,
+  count-only funnel with refresh and clear. No text, identifiers, timestamps,
+  files or telemetry.
+
+### Fixed
+
+- `SYSTEM_POWER_STATUS` was declared 16 bytes with the energy-saver byte after
+  `BatteryFullLifeTime`, so it was read at offset 12 instead of 3 and the
+  Low Power Mode pause could never engage. The struct now matches the real
+  12-byte layout and a test pins the size and offset.
+- The Windows verification workflow now runs `tests/Cotabby.Win32.Tests`, so
+  the field-identity regressions execute; previously that project was built
+  but never tested.
+- Two synthetic secret fixtures were repaired after their values lost their
+  provider shape, which had been failing the sanitizer suite.
+
+### Scope and verification
+
+- 418 Core tests pass; Windows-targeted App and regression-tool builds are
+  clean. The real Settings window is exercised on Windows CI for every new
+  control.
+- Nothing from upstream that was previously declined is imported here: no
+  typing history, no cloud endpoint, no clipboard context, no telemetry.
+- Owner live validation still pending: physical keys, real model output, a
+  real battery/energy-saver transition, and browser credential-metadata
+  recall. The entropy pause can also delay suggestions over code.
+
 ## 0.5.1 — 2026-10-16
 
 ### Fixed

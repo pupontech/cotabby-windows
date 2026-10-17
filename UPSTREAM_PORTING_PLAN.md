@@ -37,6 +37,7 @@ Bring high-value, compatible improvements from the original Cotabby project into
 | Correctable-misspelling completion guard | [#814 / `ac2699e`](https://github.com/FuJacob/cotabby/commit/ac2699e4ab40b68cf7429b7d13d5a7206c99dbbc) | Merged PR #6, shipped in v0.5.0. Pure guard live (junk runs); spelling checks pluggable and dormant until an `ISpellAssessor` is registered. |
 | Low Power Mode pause | [#812 / `d4c4d23`](https://github.com/FuJacob/cotabby/commit/d4c4d23410dc8a720c30725ae63451dad598f525) | Merged PR #6, shipped in v0.5.0. Opt-in General toggle; Windows battery-saver read via `GetSystemPowerStatus`. Real engagement owner-verified. |
 | Held-presentation rapid-Tab acceptance | [#838 / `7724926`](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d) | Merged PR #6, shipped in v0.5.0. Coordinator presentation mark; live rapid-Tab behavior owner-verified. |
+| TabType Phase 1: bounded sanitized diagnostics, extra field protection, battery posture, count-only statistics | none (this fork's `openspec/audit/` plan) | Implemented on `feat/tabtype-integration` (PR #10). 418 Core tests; Windows-targeted builds clean; real Settings window exercised on Windows CI. Risky behavior opt-in. Live battery/energy-saver, physical keys and browser credential recall owner-verified. |
 
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
