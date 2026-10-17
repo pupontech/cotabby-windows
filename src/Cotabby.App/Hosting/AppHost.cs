@@ -137,6 +137,8 @@ public sealed class AppHost : IAsyncDisposable
     public void ApplyRuntimeSettings()
     {
         Coordinator.Enabled = Settings.Enabled;
+        if (Services.GetRequiredService<IFocusTracker>() is UiaFocusTracker uiaTracker)
+            uiaTracker.SmarterFieldSuppression = Settings.SmarterFieldSuppression;
         Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";
         Coordinator.LowPowerModePause = Settings.PauseInLowPowerMode ? PowerMonitor : null;
 

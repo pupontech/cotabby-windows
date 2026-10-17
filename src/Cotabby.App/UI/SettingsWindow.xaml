@@ -697,6 +697,15 @@
             <!-- ========================== APPS ========================== -->
             <ScrollViewer x:Name="AppsPane" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                 <StackPanel Margin="28,22,28,28" MaxWidth="660" HorizontalAlignment="Left">
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Protected fields" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="SmarterFieldsToggle" Content="Enable extra field protection"
+                                      Checked="OnSmarterFieldsChanged" Unchecked="OnSmarterFieldsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="When enabled, 1Password, KeePass, KeePassXC, Bitwarden, Enpass and Dashlane are protected by default. Mixed-character runs in single-line fields pause suggestions until whitespace. This heuristic can pause code or identifiers and is not guaranteed password detection. Existing credential protection always stays on." />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Disabled Apps" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>

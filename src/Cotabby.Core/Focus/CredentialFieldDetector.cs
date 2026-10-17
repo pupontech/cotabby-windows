@@ -9,6 +9,7 @@ public static class CredentialFieldDetector
         "phone", "mobile number", "password", "passcode", "pin", "one-time", "one time code",
         "verification code", "security code", "otp", "2fa", "two-factor", "authentication code",
         "card number", "cvc", "cvv", "expiry", "expiration",
+        "passphrase", "pass phrase", "security answer", "recovery code",
     ];
 
     private static readonly string[] ProseLabelWords =

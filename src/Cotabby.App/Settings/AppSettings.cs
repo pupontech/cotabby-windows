@@ -78,6 +78,7 @@ public sealed class AppSettings
     public List<string> BlockedApps { get; set; } = new();
 
     // ---- Advanced -------------------------------------------------------
+    public bool SmarterFieldSuppression { get; set; }
     public string LogVerbosity { get; set; } = "information";
     public long MaxLogBytes { get; set; } = 8 * 1024 * 1024;
     public int MaxLogFiles { get; set; } = 3;

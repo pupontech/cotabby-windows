@@ -34,6 +34,9 @@ public sealed class UiaFocusTracker : IFocusTracker
 
     public UiaFocusTracker(ILogger<UiaFocusTracker> logger) => _logger = logger;
 
+    /// <summary>Opt-in process defaults and transient neutral-field back-off.</summary>
+    public bool SmarterFieldSuppression { get; set; }
+
     public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
@@ -165,7 +168,8 @@ public sealed class UiaFocusTracker : IFocusTracker
             // (Upstream #848.) This also covers password fields, which the tracker
             // used to read first and only mark secure afterwards.
             bool isPassword = SafeRead(() => info.IsPassword);
-            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
+            if ((SmarterFieldSuppression && FieldSuppressionPolicy.IsProtectedProcess(TryGetProcessName(info.ProcessId)))
+                || IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
                 snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
@@ -178,12 +182,11 @@ public sealed class UiaFocusTracker : IFocusTracker
             // prefix). If it reveals a credential, the text must not travel any
             // further — the returned snapshot carries no text.
             var (text, caretOffset) = ReadTextAndCaret(element);
-            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text))
+            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text)
+                || (SmarterFieldSuppression && FieldSuppressionPolicy.ShouldBackOff(
+                    text[..Math.Clamp(caretOffset, 0, text.Length)], controlType == "Edit")))
             {
-                _logger.LogInformation(
-                    "Sign-in/verification field left alone (host={Host}, control={Control}). " +
-                    "No text, metadata value or request leaves this read.",
-                    TryGetProcessName(info.ProcessId), controlType);
+                _logger.LogInformation("Protected field left alone; no payload propagated.");
                 snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }

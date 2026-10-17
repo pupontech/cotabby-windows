@@ -856,7 +856,18 @@ public partial class SettingsWindow : Window
 
     // ---------- Apps ----------
 
-    private void PopulateApps() => BuildBlockedAppRows();
+    private void PopulateApps()
+    {
+        SmarterFieldsToggle.IsChecked = _host.Settings.SmarterFieldSuppression;
+        BuildBlockedAppRows();
+    }
+
+    private void OnSmarterFieldsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.SmarterFieldSuppression = SmarterFieldsToggle.IsChecked == true;
+        _host.PersistSettings();
+    }
 
     private void BuildBlockedAppRows()
     {
