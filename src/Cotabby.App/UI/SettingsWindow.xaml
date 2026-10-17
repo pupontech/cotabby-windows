@@ -743,6 +743,20 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Diagnostics" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="Log verbosity" />
+                            <ComboBox x:Name="LogVerbosityCombo" Margin="0,8,0,8" SelectionChanged="OnLogVerbosityChanged">
+                                <ComboBoxItem Content="Information (default)" Tag="information" />
+                                <ComboBoxItem Content="Debug" Tag="debug" />
+                                <ComboBoxItem Content="Warning" Tag="warning" />
+                                <ComboBoxItem Content="Error" Tag="error" />
+                            </ComboBox>
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                       Text="Applies immediately to all diagnostic sinks. Secrets are always redacted. Logs rotate at 8 MiB with three backups by default; reopen a tail after rotation. Older logs may still contain private text. Size/retention settings in settings.json apply after restart." />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Paths" />
                     <Border Style="{StaticResource Card}" Padding="14,6">
                         <StackPanel>

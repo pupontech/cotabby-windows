@@ -78,6 +78,10 @@ public sealed class AppSettings
     public List<string> BlockedApps { get; set; } = new();
 
     // ---- Advanced -------------------------------------------------------
+    public string LogVerbosity { get; set; } = "information";
+    public long MaxLogBytes { get; set; } = 8 * 1024 * 1024;
+    public int MaxLogFiles { get; set; } = 3;
+
     /// <summary>Inline emoji autocomplete (<c>:smile:</c> → 😄). Default on.</summary>
     public bool EmojiPickerEnabled { get; set; } = true;
 
