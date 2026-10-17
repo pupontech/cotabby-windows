@@ -941,6 +941,17 @@ public partial class SettingsWindow : Window
         SettingsPathText.Text = _host.SettingsStore.Path;
         ModelsPathText.Text = ModelCatalog.DefaultLocalDirectory();
         LogPathText.Text = @"C:\tmp\cotabby-live.log";
+        LogVerbosityCombo.SelectedIndex = _host.Settings.LogVerbosity?.ToLowerInvariant() switch
+        {
+            "debug" => 1, "warning" => 2, "error" => 3, _ => 0,
+        };
+    }
+
+    private void OnLogVerbosityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded || LogVerbosityCombo.SelectedItem is not ComboBoxItem item) return;
+        _host.Settings.LogVerbosity = item.Tag as string ?? "information";
+        _host.PersistSettings();
     }
 
     private void OnDebounceChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

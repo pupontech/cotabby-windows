@@ -59,20 +59,18 @@ public sealed class AppHost : IAsyncDisposable
     public AppHost(SynchronizationContext uiContext, GhostOverlayWindow overlay)
     {
         var sc = new ServiceCollection();
+        var settingsStore = new SettingsStore();
+        var startupSettings = settingsStore.Load();
+        Func<LogLevel> minimumLevel = () => SanitizingLoggerProvider.ParseVerbosity(startupSettings.LogVerbosity);
 
         sc.AddLogging(b =>
         {
-            b.SetMinimumLevel(LogLevel.Information);
-            b.AddDebug();
-            b.AddSimpleConsole(opts =>
-            {
-                opts.SingleLine = true;
-                opts.TimestampFormat = "HH:mm:ss.fff ";
-            });
-            // File sink so detailed monitoring lands somewhere stable
-            // regardless of how the user launched the exe. Path is fixed at
-            // C:\tmp\cotabby-live.log to match the existing tail tooling.
-            b.AddProvider(new FileLoggerProvider(@"C:\tmp\cotabby-live.log"));
+            // Provider filters read the live setting; Microsoft filters must allow Debug through.
+            b.SetMinimumLevel(LogLevel.Debug);
+            b.AddProvider(new SanitizingLoggerProvider(Console.WriteLine, minimumLevel));
+            b.AddProvider(new SanitizingLoggerProvider(line => System.Diagnostics.Debug.WriteLine(line), minimumLevel));
+            b.AddProvider(new FileLoggerProvider(@"C:\tmp\cotabby-live.log", minimumLevel,
+                startupSettings.MaxLogBytes, startupSettings.MaxLogFiles));
         });
 
         sc.AddSingleton<HttpClient>(_ =>
@@ -85,8 +83,8 @@ public sealed class AppHost : IAsyncDisposable
             return h;
         });
 
-        sc.AddSingleton<SettingsStore>();
-        sc.AddSingleton(provider => provider.GetRequiredService<SettingsStore>().Load());
+        sc.AddSingleton(settingsStore);
+        sc.AddSingleton(startupSettings);
         sc.AddSingleton(_ => new PerformanceMetricsStore(PerformanceLogPath()));
         sc.AddSingleton<LowPowerModeMonitor>();
 
