@@ -40,6 +40,7 @@ public sealed class AppHost : IAsyncDisposable
     /// user enables it in the pane (upstream's default).
     /// </summary>
     public PerformanceMetricsStore PerformanceMetrics { get; }
+    public SuggestionStatisticsStore Statistics { get; } = new();
 
     /// <summary>Windows energy-saver reader behind the Low Power Mode pause gate.</summary>
     public LowPowerModeMonitor PowerMonitor { get; private set; } = null!;
@@ -117,6 +118,7 @@ public sealed class AppHost : IAsyncDisposable
         PerformanceMetrics = Services.GetRequiredService<PerformanceMetricsStore>();
         PerformanceMetrics.TrackingEnabled = Settings.EnablePerformanceTracking;
         Coordinator.PerformanceMetrics = PerformanceMetrics;
+        Coordinator.Statistics = Statistics;
         PowerMonitor = Services.GetRequiredService<LowPowerModeMonitor>();
 
         ApplyRuntimeSettings();
@@ -137,6 +139,7 @@ public sealed class AppHost : IAsyncDisposable
     public void ApplyRuntimeSettings()
     {
         Coordinator.Enabled = Settings.Enabled;
+        Statistics.Enabled = Settings.EnableSuggestionStatistics;
         if (Services.GetRequiredService<IFocusTracker>() is UiaFocusTracker uiaTracker)
             uiaTracker.SmarterFieldSuppression = Settings.SmarterFieldSuppression;
         Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";

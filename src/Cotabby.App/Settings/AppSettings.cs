@@ -79,6 +79,7 @@ public sealed class AppSettings
 
     // ---- Advanced -------------------------------------------------------
     public bool SmarterFieldSuppression { get; set; }
+    public bool EnableSuggestionStatistics { get; set; }
     public bool BatteryAwareInference { get; set; }
     public int BatteryThresholdPercent { get; set; } = 40;
     public string LogVerbosity { get; set; } = "information";

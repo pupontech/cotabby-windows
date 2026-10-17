@@ -1031,6 +1031,8 @@ public partial class SettingsWindow : Window
 
     private void PopulatePerformance()
     {
+        SuggestionStatsToggle.IsChecked = _host.Settings.EnableSuggestionStatistics;
+        RefreshSuggestionStats();
         PerfTrackToggle.IsChecked = _host.Settings.EnablePerformanceTracking;
         if (_host.PerformanceMetrics is { } metrics) metrics.TrackingEnabled = PerfTrackToggle.IsChecked == true;
         // No counter-category probe here: enumerating the "GPU Engine" set is a
@@ -1045,6 +1047,25 @@ public partial class SettingsWindow : Window
         // one now would consume the tracker's baseline outside the sampling
         // window.
     }
+
+    private void OnSuggestionStatsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.EnableSuggestionStatistics = SuggestionStatsToggle.IsChecked == true;
+        _host.PersistSettings();
+        RefreshSuggestionStats();
+    }
+
+    private void OnRefreshSuggestionStats(object sender, RoutedEventArgs e) => RefreshSuggestionStats();
+    private void OnClearSuggestionStats(object sender, RoutedEventArgs e)
+    {
+        _host.Statistics.Clear();
+        RefreshSuggestionStats();
+    }
+
+    private void RefreshSuggestionStats() => SuggestionStatsText.Text =
+        (_host.Statistics.Enabled ? "Recording — " : "Off — ") +
+        string.Join(" · ", _host.Statistics.Snapshot().Select(pair => $"{pair.Key}: {pair.Value}"));
 
     private void OnPerfTrackChanged(object sender, RoutedEventArgs e)
     {

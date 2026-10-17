@@ -161,6 +161,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// "Pause in Low Power Mode" setting), an active energy-saver state pauses
     /// new requests. Null disables the check entirely. Mirrors upstream #812.
     /// </summary>
+    public SuggestionStatisticsStore? Statistics { get; set; }
     public ILowPowerModeProvider? LowPowerModePause { get; set; }
     public Cotabby.Core.Support.IPowerSnapshotProvider? PowerProvider { get; set; }
     public bool BatteryAwareInference { get; set; }
@@ -454,8 +455,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             _logger.LogDebug("No focused field at trigger-decision time.");
             return;
         }
+        if (field.IsCredentialField && ev.IsKeyDown && ev.Kind == KeyKind.Character)
+        {
+            Statistics?.Record(SuggestionStatistic.SuppressedCredential);
+            return;
+        }
         if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
         {
+            Statistics?.Record(SuggestionStatistic.SuppressedBattery);
             _logger.LogDebug("Suggestions paused while Windows energy saver is on.");
             return;
         }
@@ -476,6 +483,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         // and the work function snapshots the *live* focus at debounce expiry.
         _logger.LogInformation("Triggering suggestion: host={Host} textLen={Len} caret={Caret}",
             field.ProcessName, field.Text.Length, field.CaretOffset);
+        Statistics?.Record(SuggestionStatistic.Triggered);
         TriggerGeneration(field);
     }
 
@@ -486,15 +494,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         // sign-in/verification field must never have its text built into a request.
         if (fieldAtTrigger.IsCredentialField)
         {
+            Statistics?.Record(SuggestionStatistic.SuppressedCredential);
             _logger.LogDebug("TriggerGeneration skipped: sign-in/verification field ({Host}).",
                 fieldAtTrigger.ProcessName);
             return;
         }
 
         var posture = BatteryPosture;
-        if (posture == Cotabby.Core.Support.InferencePosture.Deferred) return;
+        if (posture == Cotabby.Core.Support.InferencePosture.Deferred)
+        {
+            Statistics?.Record(SuggestionStatistic.SuppressedBattery);
+            return;
+        }
 
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
+        Statistics?.Record(SuggestionStatistic.Requested);
         var pid = fieldAtTrigger.ProcessId;
         var metrics = PerformanceMetrics;
         var modelId = _runtimeModelId;
@@ -545,6 +559,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 }
 
                 var sw = Stopwatch.StartNew();
+                Statistics?.Record(SuggestionStatistic.EngineFired);
                 string accumulated = string.Empty;
                 bool overlayShown = false;
                 bool requestPresented = false;
@@ -670,6 +685,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         SetHeldPresentation(accumulated);
                         _overlay.Show(accumulated, liveAnchor);
                         overlayShown = true;
+                        if (!requestPresented) Statistics?.Record(SuggestionStatistic.Presented);
                         requestPresented = true;
                         _logger.LogInformation(
                             "Overlay shown req={ReqId} chars={Chars} anchor={X},{Y}",
@@ -690,6 +706,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             _overlay.Update(accumulated);
                         }
                         else { SetHeldPresentation(accumulated); _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
+                        if (!requestPresented) Statistics?.Record(SuggestionStatistic.Presented);
                         requestPresented = true;
                         _logger.LogInformation(
                             "Overlay updated req={ReqId} chars={Chars}",
@@ -1008,11 +1025,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     .ConfigureAwait(false);
                 if (!inserted)
                 {
+                    Statistics?.Record(SuggestionStatistic.InsertionRejected);
                     await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
                     _logger.LogWarning("Accept insertion returned false; session was not advanced or armed.");
                     return AcceptanceIntentStatus.InsertionRejected;
                 }
                 insertionLanded = true;
+                Statistics?.Record(whole ? SuggestionStatistic.AcceptedWhole :
+                    AcceptanceGranularity == "phrase" ? SuggestionStatistic.AcceptedPhrase : SuggestionStatistic.AcceptedWord);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1251,6 +1271,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _doubleTapAcceptanceState.Reset();
         CompletePendingAcceptanceIntents(AcceptanceIntentStatus.IntentInvalidated);
         if (_session is null && !_generationInFlight) return;
+        Statistics?.Record(reason is "accepted" or "consumed" ? SuggestionStatistic.Exhausted : SuggestionStatistic.Cancelled);
         _logger.LogInformation("Cancel session ({Reason}).", reason);
         _session = null;
         _sessionPid = 0;

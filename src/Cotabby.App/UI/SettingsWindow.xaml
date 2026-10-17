@@ -870,6 +870,20 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Session suggestion statistics" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="SuggestionStatsToggle" Content="Count suggestion lifecycle events"
+                                      Checked="OnSuggestionStatsChanged" Unchecked="OnSuggestionStatsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Opt-in counters only. No text, model/app identifiers, timestamps or files. Counts reset when Cotabby exits. Accepted counts mean the inserter reported success, not independently verified host delivery." />
+                            <TextBlock x:Name="SuggestionStatsText" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <Button Style="{StaticResource Btn}" Content="Refresh counts" Click="OnRefreshSuggestionStats" />
+                                <Button Style="{StaticResource Btn}" Content="Clear statistics" Margin="8,0,0,0" Click="OnClearSuggestionStats" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Tracking" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
