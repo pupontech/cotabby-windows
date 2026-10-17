@@ -117,6 +117,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // coordinator tears down its session and we don't leak ghost text.
             if (snap is null)
             {
+                AdvanceFocusPartition(0, 0, 0, 0, 0);
                 _current = null;
                 FocusChanged?.Invoke(this, null);
                 return;
@@ -127,6 +128,8 @@ public sealed class UiaFocusTracker : IFocusTracker
             // UIA's RuntimeId is a managed int[] and equality isn't trivial across
             // events. Treat every focus event as a state change — cheap enough.
             _current = snap;
+            AdvanceFocusPartition(snap.ProcessId, snap.FieldRect.X, snap.FieldRect.Y,
+                snap.FieldRect.Width, snap.FieldRect.Height);
             FocusChanged?.Invoke(this, snap);
         }
         catch (Exception ex)
@@ -374,36 +377,40 @@ public sealed class UiaFocusTracker : IFocusTracker
     }
 
     /// <summary>
-    /// A previous presentation built from the same parts cannot distinguish
-    /// fields, so it must never be reused as proof of ownership. Each distinct
-    /// descriptor is granted a sequence suffix once; a repeat refuses the
-    /// identity so ownership becomes UNPROVEN instead of colliding.
+    /// Scopes a descriptor to the focused field it was read from. A host that
+    /// publishes no runtime id is re-read on every keystroke and at accept time,
+    /// so a descriptor-only identity must stay stable across reads of the SAME
+    /// field while remaining distinct across a move to another one. The epoch
+    /// advances only when the focus partition (process + field rectangle) changes,
+    /// which is exactly a move to a different control; a repeated read of one
+    /// field keeps its identity, so acceptance keeps working in hosts that expose
+    /// no runtime id.
     /// </summary>
-    internal string? FallbackIdentityFromDescriptor(string descriptor)
+    internal string FallbackIdentityFromDescriptor(string descriptor)
     {
-        int identityIndex = ResolveFieldDescriptorIndex(descriptor);
-        return identityIndex < 0 ? null : string.Concat(descriptor, "|seq=", identityIndex.ToString(CultureInfo.InvariantCulture));
+        lock (_descriptorGate)
+            return string.Concat(descriptor, "|gen=", _focusEpoch.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>
-    /// Returns the 1-based position of <paramref name="descriptor"/> among the
-    /// focused descriptors this process has produced, or -1 when it repeats. A
-    /// repeated descriptor means the same descriptor could describe a different
-    /// field, so it must never be returned as a stable identity.
+    /// Records which field currently owns the descriptor namespace. Called for
+    /// every focus change so a later field cannot inherit an earlier field's
+    /// identity even when both expose identical metadata.
     /// </summary>
-    private int ResolveFieldDescriptorIndex(string descriptor)
+    internal void AdvanceFocusPartition(int processId, double left, double top, double width, double height)
     {
         lock (_descriptorGate)
         {
-            if (_descriptorIndex.TryGetValue(descriptor, out int index)) return -1;
-            index = _descriptorIndex.Count + 1;
-            _descriptorIndex[descriptor] = index;
-            return index;
+            var partition = (processId, Math.Round(left), Math.Round(top), Math.Round(width), Math.Round(height));
+            if (_focusPartition == partition) return;
+            _focusPartition = partition;
+            _focusEpoch++;
         }
     }
 
     private readonly object _descriptorGate = new();
-    private readonly Dictionary<string, int> _descriptorIndex = new(StringComparer.Ordinal);
+    private (int ProcessId, double Left, double Top, double Width, double Height) _focusPartition;
+    private int _focusEpoch;
 
     private static string ControlTypeNameOrEmpty(ControlType? controlType) =>
         controlType is null ? string.Empty : ControlTypeName(controlType);
