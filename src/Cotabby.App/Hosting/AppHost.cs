@@ -141,6 +141,10 @@ public sealed class AppHost : IAsyncDisposable
             uiaTracker.SmarterFieldSuppression = Settings.SmarterFieldSuppression;
         Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";
         Coordinator.LowPowerModePause = Settings.PauseInLowPowerMode ? PowerMonitor : null;
+        Coordinator.PowerProvider = PowerMonitor;
+        Coordinator.BatteryAwareInference = Settings.BatteryAwareInference;
+        Coordinator.BatteryThresholdPercent = Settings.BatteryThresholdPercent;
+        Coordinator.RequestDebounce = TimeSpan.FromMilliseconds(Math.Clamp(Settings.DebounceMs, 20, 300));
 
         var (single, multi) = CompletionLengthPreset.Tokens(Settings.CompletionLengthPreset);
         Coordinator.MaxTokensSingleLine = single;

@@ -79,6 +79,8 @@ public sealed class AppSettings
 
     // ---- Advanced -------------------------------------------------------
     public bool SmarterFieldSuppression { get; set; }
+    public bool BatteryAwareInference { get; set; }
+    public int BatteryThresholdPercent { get; set; } = 40;
     public string LogVerbosity { get; set; } = "information";
     public long MaxLogBytes { get; set; } = 8 * 1024 * 1024;
     public int MaxLogFiles { get; set; } = 3;

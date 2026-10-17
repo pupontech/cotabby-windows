@@ -947,6 +947,9 @@ public partial class SettingsWindow : Window
 
     private void PopulateAdvanced()
     {
+        BatteryAwareToggle.IsChecked = _host.Settings.BatteryAwareInference;
+        BatteryThresholdSlider.Value = Math.Clamp(_host.Settings.BatteryThresholdPercent, 5, 95);
+        RefreshBatteryStatus();
         DebounceSlider.Value = Math.Clamp(_host.Settings.DebounceMs, 20, 300);
         DebounceLabel.Text = $"{(int)DebounceSlider.Value} ms";
         SettingsPathText.Text = _host.SettingsStore.Path;
@@ -956,6 +959,30 @@ public partial class SettingsWindow : Window
         {
             "debug" => 1, "warning" => 2, "error" => 3, _ => 0,
         };
+    }
+
+    private void OnBatterySettingsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.BatteryAwareInference = BatteryAwareToggle.IsChecked == true;
+        _host.PersistSettings();
+        RefreshBatteryStatus();
+    }
+
+    private void OnBatteryThresholdChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_loaded) return;
+        _host.Settings.BatteryThresholdPercent = (int)BatteryThresholdSlider.Value;
+        _host.PersistSettings();
+        RefreshBatteryStatus();
+    }
+
+    private void OnRefreshBatteryStatus(object sender, RoutedEventArgs e) => RefreshBatteryStatus();
+
+    private void RefreshBatteryStatus()
+    {
+        if (BatteryPostureText is null) return;
+        BatteryPostureText.Text = $"Current posture: {_host.Coordinator.BatteryPosture}. Pause below {_host.Settings.BatteryThresholdPercent}% (refresh to update).";
     }
 
     private void OnLogVerbosityChanged(object sender, SelectionChangedEventArgs e)

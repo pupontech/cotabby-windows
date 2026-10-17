@@ -752,6 +752,20 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Battery-aware inference" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="BatteryAwareToggle" Content="Reduce inference while on battery"
+                                      Checked="OnBatterySettingsChanged" Unchecked="OnBatterySettingsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="On battery: double debounce and lower completion length one tier. Below the threshold: defer new requests until charge recovers by five points or AC returns. Unknown state and charging keep normal behavior. Existing work is not canceled just because power changes." />
+                            <Slider x:Name="BatteryThresholdSlider" Minimum="5" Maximum="95" TickFrequency="5"
+                                    IsSnapToTickEnabled="True" Margin="0,12,0,8" ValueChanged="OnBatteryThresholdChanged" />
+                            <TextBlock x:Name="BatteryPostureText" Style="{StaticResource Caption}" />
+                            <Button Style="{StaticResource Btn}" Content="Refresh power status" Margin="0,8,0,0"
+                                    HorizontalAlignment="Left" Click="OnRefreshBatteryStatus" />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Diagnostics" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>

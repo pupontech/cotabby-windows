@@ -162,6 +162,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// new requests. Null disables the check entirely. Mirrors upstream #812.
     /// </summary>
     public ILowPowerModeProvider? LowPowerModePause { get; set; }
+    public Cotabby.Core.Support.IPowerSnapshotProvider? PowerProvider { get; set; }
+    public bool BatteryAwareInference { get; set; }
+    public int BatteryThresholdPercent { get; set; } = 40;
+    public TimeSpan? RequestDebounce { get; set; }
+    private Cotabby.Core.Support.InferencePosture _batteryPosture;
+    public Cotabby.Core.Support.InferencePosture BatteryPosture => _batteryPosture =
+        Cotabby.Core.Support.BatteryPolicy.Evaluate(PowerProvider?.Snapshot ?? default,
+            BatteryAwareInference, BatteryThresholdPercent, _batteryPosture);
 
     /// <summary>
     /// Per-request max-token overrides driven by the completion length preset.
@@ -483,6 +491,9 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             return;
         }
 
+        var posture = BatteryPosture;
+        if (posture == Cotabby.Core.Support.InferencePosture.Deferred) return;
+
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
         var pid = fieldAtTrigger.ProcessId;
         var metrics = PerformanceMetrics;
@@ -508,6 +519,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             request = request with { SingleLine = true };
         }
         var anchor = fieldAtTrigger.CaretRect;
+        request = request with { MaxTokens = Cotabby.Core.Support.BatteryPolicy.TokenBudget(
+            request.MaxTokens, posture, !request.SingleLine) };
         var element = fieldAtTrigger.ElementHandle;
         var field = fieldAtTrigger;
 
@@ -716,7 +729,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     _inFlightRequestId = null;
                 });
             }
-        });
+        }, debounce: RequestDebounce is TimeSpan baseline
+            ? Cotabby.Core.Support.BatteryPolicy.Debounce(baseline, posture) : null);
     }
 
     private void PostAcceptIntent(AcceptIntent intent)

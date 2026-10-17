@@ -644,6 +644,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
     internal sealed class TestSuggestionEngine : ISuggestionEngine
     {
+        public SuggestionRequest? LastRequest { get; private set; }
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsReady => true;
@@ -652,6 +653,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             SuggestionRequest request,
             [EnumeratorCancellation] CancellationToken ct)
         {
+            LastRequest = request;
             Started.TrySetResult();
             await Release.Task.WaitAsync(ct).ConfigureAwait(false);
             yield return new SuggestionChunk("world again tomorrow today", IsFinal: true);
