@@ -10,8 +10,8 @@ public sealed class SecretSanitizerTests
     [InlineData("AKIAABCDEFGHIJKLMNOP")]
     [InlineData("glpat-abcdefghijklmnopqrstuvwx")]
     [InlineData("hf_abcdefghijklmnopqrstuvwxyz123456")]
-    [InlineData("x" + "oxb-1...mnop")]
-    [InlineData("s" + "k_liv...uvwx")]
+    [InlineData("x" + "oxb-" + "synthetic-1234567890")]
+    [InlineData("s" + "k_live_" + "SyntheticFixture123456")]
     [InlineData("AIzaabcdefghijklmnopqrstuvwxyz123456789")]
     [InlineData("npm_abcdefghijklmnopqrstuvwxyz1234567890")]
     public void ProviderFormatsAreRedacted(string key) =>
