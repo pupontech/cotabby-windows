@@ -164,16 +164,6 @@ internal static class Program
         return result;
     }
 
-    private static IEnumerable<T> FindAll<T>(DependencyObject root) where T : DependencyObject
-    {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            if (child is T match) yield return match;
-            foreach (var nested in FindAll<T>(child)) yield return nested;
-        }
-    }
-
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
