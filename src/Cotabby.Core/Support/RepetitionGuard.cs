@@ -8,6 +8,29 @@ namespace Cotabby.Core.Support;
 /// </summary>
 public static class RepetitionGuard
 {
+    /// <summary>
+    /// Post-decode companion to the token guard: a one-to-three-word sequence
+    /// repeated three times is a visible loop even if token IDs differ.
+    /// Ported from upstream CompletionContentPolicy.isRepetitive. Retains
+    /// punctuation and allows two copies (ordinary emphasis).
+    /// </summary>
+    public static bool HasWordLoop(string completion)
+    {
+        var words = completion.ToLowerInvariant().Split(
+            (char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        for (int period = 1; period <= 3; period++)
+        {
+            if (words.Length < period * 3) continue;
+            int run = 0;
+            for (int index = period; index < words.Length; index++)
+            {
+                run = words[index] == words[index - period] ? run + 1 : 0;
+                if (run >= period * 2) return true;
+            }
+        }
+        return false;
+    }
+
     public static HashSet<int> BlockedTokens(IReadOnlyList<int> history, int ngramSize = 3)
     {
         var blocked = new HashSet<int>();

@@ -11,6 +11,7 @@ public enum SuppressionReason
     DuplicatesTrailingText,
     EchoesPrecedingText,
     UnsafeToInsert,
+    RepetitiveContent,
 }
 
 /// <summary>
@@ -121,6 +122,11 @@ public static partial class SuggestionTextNormalizer
                         ? SuppressionReason.NormalizedToEmpty
                         : SuppressionReason.EmptyGeneration;
             return new(string.Empty, reason);
+        }
+
+        if (RepetitionGuard.HasWordLoop(text))
+        {
+            return new(string.Empty, SuppressionReason.RepetitiveContent);
         }
 
         return new(text, SuppressionReason.None);

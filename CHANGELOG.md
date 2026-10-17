@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Selectively port upstream's visible-word repetition rule: suppress a normalized
+  completion when one to three words repeat three times consecutively, even if
+  tokenization evades the existing token n-gram guard. Two-copy emphasis remains
+  allowed. Includes 24 production-normalizer regression cases; no model,
+  settings, storage or network changes. Intentional triple repetition can also
+  be suppressed. See [scope and owner test](docs/upstream-repetitive-output.md).
+
 ## 0.5.1 — 2026-10-16
 
 ### Fixed
