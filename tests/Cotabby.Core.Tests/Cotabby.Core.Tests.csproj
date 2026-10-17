@@ -24,6 +24,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\Cotabby.App\Power\LowPowerModeMonitor.cs" Link="LowPowerModeMonitor.cs" />
+    <Compile Include="..\..\src\Cotabby.App\Hosting\SanitizingLoggerProvider.cs" Link="SanitizingLoggerProvider.cs" />
+    <Compile Include="..\..\src\Cotabby.App\Hosting\FileLoggerProvider.cs" Link="FileLoggerProvider.cs" />
     <Compile Include="..\..\src\Cotabby.App\Settings\AppSettings.cs" Link="AppSettings.cs" />
     <EmbeddedResource Include="..\..\src\Cotabby.App\UI\SettingsWindow.xaml">
       <LogicalName>Cotabby.SettingsWindow.xaml</LogicalName>

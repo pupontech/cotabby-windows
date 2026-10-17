@@ -6,6 +6,16 @@ namespace Cotabby.Core.Tests;
 public class SuggestionWorkControllerTests
 {
     [Fact]
+    public async Task SubmitCanOverrideDebouncePerRequest()
+    {
+        await using var c = new SuggestionWorkController(TimeSpan.FromDays(1));
+        bool fired = false;
+        await c.Submit(_ => { fired = true; return Task.CompletedTask; }, debounce: TimeSpan.Zero)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(fired);
+    }
+
+    [Fact]
     public async Task Submit_RunsAfterDebounce()
     {
         await using var c = new SuggestionWorkController(TimeSpan.FromMilliseconds(20));

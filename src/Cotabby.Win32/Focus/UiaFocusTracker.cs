@@ -34,6 +34,9 @@ public sealed class UiaFocusTracker : IFocusTracker
 
     public UiaFocusTracker(ILogger<UiaFocusTracker> logger) => _logger = logger;
 
+    /// <summary>Opt-in process defaults and transient neutral-field back-off.</summary>
+    public bool SmarterFieldSuppression { get; set; }
+
     public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
@@ -114,6 +117,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // coordinator tears down its session and we don't leak ghost text.
             if (snap is null)
             {
+                AdvanceFocusPartition(0, 0, 0, 0, 0);
                 _current = null;
                 FocusChanged?.Invoke(this, null);
                 return;
@@ -124,6 +128,8 @@ public sealed class UiaFocusTracker : IFocusTracker
             // UIA's RuntimeId is a managed int[] and equality isn't trivial across
             // events. Treat every focus event as a state change — cheap enough.
             _current = snap;
+            AdvanceFocusPartition(snap.ProcessId, snap.FieldRect.X, snap.FieldRect.Y,
+                snap.FieldRect.Width, snap.FieldRect.Height);
             FocusChanged?.Invoke(this, snap);
         }
         catch (Exception ex)
@@ -165,7 +171,8 @@ public sealed class UiaFocusTracker : IFocusTracker
             // (Upstream #848.) This also covers password fields, which the tracker
             // used to read first and only mark secure afterwards.
             bool isPassword = SafeRead(() => info.IsPassword);
-            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
+            if ((SmarterFieldSuppression && FieldSuppressionPolicy.IsProtectedProcess(TryGetProcessName(info.ProcessId)))
+                || IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
                 snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
@@ -178,12 +185,11 @@ public sealed class UiaFocusTracker : IFocusTracker
             // prefix). If it reveals a credential, the text must not travel any
             // further — the returned snapshot carries no text.
             var (text, caretOffset) = ReadTextAndCaret(element);
-            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text))
+            if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text)
+                || (SmarterFieldSuppression && FieldSuppressionPolicy.ShouldBackOff(
+                    text[..Math.Clamp(caretOffset, 0, text.Length)], controlType == "Edit")))
             {
-                _logger.LogInformation(
-                    "Sign-in/verification field left alone (host={Host}, control={Control}). " +
-                    "No text, metadata value or request leaves this read.",
-                    TryGetProcessName(info.ProcessId), controlType);
+                _logger.LogInformation("Protected field left alone; no payload propagated.");
                 snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
                 return true;
             }
@@ -337,13 +343,15 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// is truncated so the value cannot grow with host content.
     /// </summary>
     /// <remarks>
-    /// Granularity is per host window in the common case where a host gives its
-    /// edits neither an AutomationId nor an accessible name — the same
-    /// granularity the pre-identity process/window check had, and strictly better
-    /// than no identity, because fields the host does distinguish stay
-    /// distinguished. If a host derives its accessible name from the field content
-    /// the fallback flaps as text changes; the failure mode there is a Tab that
-    /// passes through to the host, never an insertion into a different field.
+    /// Two distinct anonymous editable controls in one host window can expose
+    /// identical metadata, which would let this descriptor collide and let a
+    /// suggestion bound to one field be accepted in the other. When the parts
+    /// cannot distinguish a focused element from the previously presented one,
+    /// the descriptor is refused (null): the coordinator then treats ownership as
+    /// UNPROVEN, which passes the Tab through to the host instead of inserting
+    /// into an unproven target. A flapping content-derived name has the same
+    /// failure mode: a Tab pass-through, never an insertion into a different
+    /// field.
     /// </remarks>
     private string? FallbackFieldIdentity(AutomationElement.AutomationElementInformation info)
     {
@@ -359,16 +367,50 @@ public sealed class UiaFocusTracker : IFocusTracker
             return null;
         }
 
-        // Fixed key order and fixed separators, so two fields cannot collide by
-        // reordering; invariant formatting keeps the value identical across
-        // cultures, which matters because it is only ever compared for equality.
-        return string.Concat(
+        string descriptor = string.Concat(
             "ct=", controlType,
             "|aid=", automationId,
             "|nm=", name,
             "|hwnd=", windowHandle.ToString(CultureInfo.InvariantCulture),
             "|pid=", processId.ToString(CultureInfo.InvariantCulture));
+        return FallbackIdentityFromDescriptor(descriptor);
     }
+
+    /// <summary>
+    /// Scopes a descriptor to the focused field it was read from. A host that
+    /// publishes no runtime id is re-read on every keystroke and at accept time,
+    /// so a descriptor-only identity must stay stable across reads of the SAME
+    /// field while remaining distinct across a move to another one. The epoch
+    /// advances only when the focus partition (process + field rectangle) changes,
+    /// which is exactly a move to a different control; a repeated read of one
+    /// field keeps its identity, so acceptance keeps working in hosts that expose
+    /// no runtime id.
+    /// </summary>
+    internal string FallbackIdentityFromDescriptor(string descriptor)
+    {
+        lock (_descriptorGate)
+            return string.Concat(descriptor, "|gen=", _focusEpoch.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Records which field currently owns the descriptor namespace. Called for
+    /// every focus change so a later field cannot inherit an earlier field's
+    /// identity even when both expose identical metadata.
+    /// </summary>
+    internal void AdvanceFocusPartition(int processId, double left, double top, double width, double height)
+    {
+        lock (_descriptorGate)
+        {
+            var partition = (processId, Math.Round(left), Math.Round(top), Math.Round(width), Math.Round(height));
+            if (_focusPartition == partition) return;
+            _focusPartition = partition;
+            _focusEpoch++;
+        }
+    }
+
+    private readonly object _descriptorGate = new();
+    private (int ProcessId, double Left, double Top, double Width, double Height) _focusPartition;
+    private int _focusEpoch;
 
     private static string ControlTypeNameOrEmpty(ControlType? controlType) =>
         controlType is null ? string.Empty : ControlTypeName(controlType);

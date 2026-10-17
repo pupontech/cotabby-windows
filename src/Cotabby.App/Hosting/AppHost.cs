@@ -40,6 +40,7 @@ public sealed class AppHost : IAsyncDisposable
     /// user enables it in the pane (upstream's default).
     /// </summary>
     public PerformanceMetricsStore PerformanceMetrics { get; }
+    public SuggestionStatisticsStore Statistics { get; } = new();
 
     /// <summary>Windows energy-saver reader behind the Low Power Mode pause gate.</summary>
     public LowPowerModeMonitor PowerMonitor { get; private set; } = null!;
@@ -59,20 +60,18 @@ public sealed class AppHost : IAsyncDisposable
     public AppHost(SynchronizationContext uiContext, GhostOverlayWindow overlay)
     {
         var sc = new ServiceCollection();
+        var settingsStore = new SettingsStore();
+        var startupSettings = settingsStore.Load();
+        Func<LogLevel> minimumLevel = () => SanitizingLoggerProvider.ParseVerbosity(startupSettings.LogVerbosity);
 
         sc.AddLogging(b =>
         {
+            // Provider filters read the live setting; Microsoft filters must allow Debug through.
             b.SetMinimumLevel(LogLevel.Debug);
-            b.AddDebug();
-            b.AddSimpleConsole(opts =>
-            {
-                opts.SingleLine = true;
-                opts.TimestampFormat = "HH:mm:ss.fff ";
-            });
-            // File sink so detailed monitoring lands somewhere stable
-            // regardless of how the user launched the exe. Path is fixed at
-            // C:\tmp\cotabby-live.log to match the existing tail tooling.
-            b.AddProvider(new FileLoggerProvider(@"C:\tmp\cotabby-live.log"));
+            b.AddProvider(new SanitizingLoggerProvider(Console.WriteLine, minimumLevel));
+            b.AddProvider(new SanitizingLoggerProvider(line => System.Diagnostics.Debug.WriteLine(line), minimumLevel));
+            b.AddProvider(new FileLoggerProvider(@"C:\tmp\cotabby-live.log", minimumLevel,
+                startupSettings.MaxLogBytes, startupSettings.MaxLogFiles));
         });
 
         sc.AddSingleton<HttpClient>(_ =>
@@ -85,8 +84,8 @@ public sealed class AppHost : IAsyncDisposable
             return h;
         });
 
-        sc.AddSingleton<SettingsStore>();
-        sc.AddSingleton(provider => provider.GetRequiredService<SettingsStore>().Load());
+        sc.AddSingleton(settingsStore);
+        sc.AddSingleton(startupSettings);
         sc.AddSingleton(_ => new PerformanceMetricsStore(PerformanceLogPath()));
         sc.AddSingleton<LowPowerModeMonitor>();
 
@@ -119,6 +118,7 @@ public sealed class AppHost : IAsyncDisposable
         PerformanceMetrics = Services.GetRequiredService<PerformanceMetricsStore>();
         PerformanceMetrics.TrackingEnabled = Settings.EnablePerformanceTracking;
         Coordinator.PerformanceMetrics = PerformanceMetrics;
+        Coordinator.Statistics = Statistics;
         PowerMonitor = Services.GetRequiredService<LowPowerModeMonitor>();
 
         ApplyRuntimeSettings();
@@ -139,8 +139,15 @@ public sealed class AppHost : IAsyncDisposable
     public void ApplyRuntimeSettings()
     {
         Coordinator.Enabled = Settings.Enabled;
+        Statistics.Enabled = Settings.EnableSuggestionStatistics;
+        if (Services.GetRequiredService<IFocusTracker>() is UiaFocusTracker uiaTracker)
+            uiaTracker.SmarterFieldSuppression = Settings.SmarterFieldSuppression;
         Coordinator.RuntimeModelId = Runtime.ActiveModel?.DisplayName ?? "unknown";
         Coordinator.LowPowerModePause = Settings.PauseInLowPowerMode ? PowerMonitor : null;
+        Coordinator.PowerProvider = PowerMonitor;
+        Coordinator.BatteryAwareInference = Settings.BatteryAwareInference;
+        Coordinator.BatteryThresholdPercent = Settings.BatteryThresholdPercent;
+        Coordinator.RequestDebounce = TimeSpan.FromMilliseconds(Math.Clamp(Settings.DebounceMs, 20, 300));
 
         var (single, multi) = CompletionLengthPreset.Tokens(Settings.CompletionLengthPreset);
         Coordinator.MaxTokensSingleLine = single;

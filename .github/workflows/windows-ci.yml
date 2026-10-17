@@ -45,6 +45,13 @@ jobs:
           --logger "trx;LogFileName=core-tests.trx"
           --results-directory artifacts/test-results
 
+      - name: Test Windows field identity regressions
+        run: >-
+          dotnet test tests/Cotabby.Win32.Tests/Cotabby.Win32.Tests.csproj
+          -c Release --no-restore
+          --logger "trx;LogFileName=win32-tests.trx"
+          --results-directory artifacts/test-results
+
       - name: Build Windows application
         run: dotnet build src/Cotabby.App/Cotabby.App.csproj -c Release --no-restore
 
@@ -105,6 +112,7 @@ jobs:
           Copy-Item docs/upstream-performance-metrics.md (Join-Path $root PERFORMANCE-NOTES.md)
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)
+          Copy-Item docs/tabtype-phase1.md (Join-Path $root TABTYPE-PHASE1-NOTES.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
@@ -124,6 +132,10 @@ jobs:
             'Ordinary writing, email subjects and document-style email bodies should still work.'
             'Browser accessibility metadata varies; this is not complete DOM/autofill parity.'
             'Check C:\tmp\cotabby-live.log for Model ... loaded and Constrained decode.'
+            'Advanced: Log verbosity applies immediately; the log rotates at 8 MiB keeping three backups, so reopen a tail after a rotation. Logs never contain secret-shaped values.'
+            'Apps: Enable extra field protection, then focus 1Password or Bitwarden (must produce no ghost text) and type prose (must still suggest). Typing an 8+ character mixed-character run pauses suggestions until the next space.'
+            'Advanced: Reduce inference while on battery - unplug and wait for the posture line to change; below the threshold ghost text should pause and resume on AC. Desktops must keep normal behavior.'
+            'Performance: Count suggestion lifecycle events, generate and accept a suggestion, then Refresh counts. Accepted means the inserter reported success, not proof the app kept the text. Counts reset on restart.'
             'Do not share the raw log: it can contain your typed text and local paths.'
             'CI proves tests, compilation, packaging, native loading, synthetic Windows UIA credential guards, and synthetic real-hook double-tap/fixture behaviour (not physical keys).'
             'Real model decoding, UI suggestions, and GPU behavior still require owner testing.'

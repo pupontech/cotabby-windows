@@ -114,8 +114,8 @@ public sealed class LlamaSuggestionEngine : ISuggestionEngine
             if (normalized.Reason != SuppressionReason.EmptyGeneration)
             {
                 _logger.LogInformation(
-                    "Req {ReqId}: suppressed ({Reason}); raw=\"{Raw}\".",
-                    request.RequestId, normalized.Reason, Preview(raw));
+                    "Req {ReqId}: suppressed ({Reason}); raw length={RawLength}.",
+                    request.RequestId, normalized.Reason, raw.Length);
             }
             yield return new SuggestionChunk(string.Empty, IsFinal: true);
             yield break;
@@ -133,15 +133,15 @@ public sealed class LlamaSuggestionEngine : ISuggestionEngine
         if (seamVerdict != SeamGuardVerdict.Allow)
         {
             _logger.LogInformation(
-                "Req {ReqId}: suppressed (seamGuard:{Reason}); raw=\"{Raw}\".",
-                request.RequestId, seamVerdict, Preview(raw));
+                "Req {ReqId}: suppressed (seamGuard:{Reason}); raw length={RawLength}.",
+                request.RequestId, seamVerdict, raw.Length);
             yield return new SuggestionChunk(string.Empty, IsFinal: true);
             yield break;
         }
 
         _logger.LogInformation(
-            "Req {ReqId}: suggestion \"{Text}\" (raw {RawLen} chars).",
-            request.RequestId, Preview(normalized.Text), raw.Length);
+            "Req {ReqId}: suggestion length={Length} (raw {RawLen} chars).",
+            request.RequestId, normalized.Text.Length, raw.Length);
         yield return new SuggestionChunk(normalized.Text, IsFinal: false);
         yield return new SuggestionChunk(string.Empty, IsFinal: true);
     }
@@ -183,9 +183,4 @@ public sealed class LlamaSuggestionEngine : ISuggestionEngine
         return false;
     }
 
-    private static string Preview(string s)
-    {
-        var flat = s.Replace("\n", "\\n").Replace("\r", "");
-        return flat.Length <= 80 ? flat : flat[..80] + "…";
-    }
 }

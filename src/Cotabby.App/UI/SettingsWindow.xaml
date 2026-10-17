@@ -697,6 +697,15 @@
             <!-- ========================== APPS ========================== -->
             <ScrollViewer x:Name="AppsPane" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                 <StackPanel Margin="28,22,28,28" MaxWidth="660" HorizontalAlignment="Left">
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Protected fields" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="SmarterFieldsToggle" Content="Enable extra field protection"
+                                      Checked="OnSmarterFieldsChanged" Unchecked="OnSmarterFieldsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="When enabled, 1Password, KeePass, KeePassXC, Bitwarden, Enpass and Dashlane are protected by default. Mixed-character runs in single-line fields pause suggestions until whitespace. This heuristic can pause code or identifiers and is not guaranteed password detection. Existing credential protection always stays on." />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Disabled Apps" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
@@ -743,6 +752,34 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Battery-aware inference" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="BatteryAwareToggle" Content="Reduce inference while on battery"
+                                      Checked="OnBatterySettingsChanged" Unchecked="OnBatterySettingsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="On battery: double debounce and lower completion length one tier. Below the threshold: defer new requests until charge recovers by five points or AC returns. Unknown state and charging keep normal behavior. Existing work is not canceled just because power changes." />
+                            <Slider x:Name="BatteryThresholdSlider" Minimum="5" Maximum="95" TickFrequency="5"
+                                    IsSnapToTickEnabled="True" Margin="0,12,0,8" ValueChanged="OnBatteryThresholdChanged" />
+                            <TextBlock x:Name="BatteryPostureText" Style="{StaticResource Caption}" />
+                            <Button Style="{StaticResource Btn}" Content="Refresh power status" Margin="0,8,0,0"
+                                    HorizontalAlignment="Left" Click="OnRefreshBatteryStatus" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Diagnostics" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="Log verbosity" />
+                            <ComboBox x:Name="LogVerbosityCombo" Margin="0,8,0,8" SelectionChanged="OnLogVerbosityChanged">
+                                <ComboBoxItem Content="Information (default)" Tag="information" />
+                                <ComboBoxItem Content="Debug" Tag="debug" />
+                                <ComboBoxItem Content="Warning" Tag="warning" />
+                                <ComboBoxItem Content="Error" Tag="error" />
+                            </ComboBox>
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                       Text="Applies immediately to all diagnostic sinks. Secrets are always redacted. Logs rotate at 8 MiB with three backups by default; reopen a tail after rotation. Older logs may still contain private text. Size/retention settings in settings.json apply after restart." />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Paths" />
                     <Border Style="{StaticResource Card}" Padding="14,6">
                         <StackPanel>
@@ -833,6 +870,21 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Session suggestion statistics" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <CheckBox x:Name="SuggestionStatsToggle" Content="Count suggestion lifecycle events"
+                                      Checked="OnSuggestionStatsChanged" Unchecked="OnSuggestionStatsChanged" />
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Opt-in counters only. No text, model/app identifiers, timestamps or files. Counts reset when Cotabby exits. Accepted counts mean the inserter reported success, not independently verified host delivery." />
+                            <TextBlock x:Name="SuggestionStatsText" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <Button Style="{StaticResource Btn}" Content="Refresh counts" Click="OnRefreshSuggestionStats" />
+                                <Button x:Name="SuggestionStatsClearButton" Style="{StaticResource Btn}"
+                                        Content="Clear statistics" Margin="8,0,0,0" Click="OnClearSuggestionStats" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Tracking" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>

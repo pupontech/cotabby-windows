@@ -29,7 +29,7 @@ public sealed class SuggestionWorkController : IAsyncDisposable
     /// Cancels any previously scheduled work. The returned task completes when
     /// the work either finishes, is cancelled, or throws.
     /// </summary>
-    public Task Submit(Func<CancellationToken, Task> work, CancellationToken external = default)
+    public Task Submit(Func<CancellationToken, Task> work, CancellationToken external = default, TimeSpan? debounce = null)
     {
         if (_disposed) return Task.CompletedTask;
 
@@ -47,16 +47,16 @@ public sealed class SuggestionWorkController : IAsyncDisposable
         prior?.Cancel();
         prior?.Dispose();
 
-        var task = RunAsync(work, cts);
+        var task = RunAsync(work, cts, debounce ?? _debounce);
         lock (_gate) { _pendingTask = task; }
         return task;
     }
 
-    private async Task RunAsync(Func<CancellationToken, Task> work, CancellationTokenSource cts)
+    private async Task RunAsync(Func<CancellationToken, Task> work, CancellationTokenSource cts, TimeSpan debounce)
     {
         try
         {
-            await Task.Delay(_debounce, cts.Token).ConfigureAwait(false);
+            await Task.Delay(debounce, cts.Token).ConfigureAwait(false);
             await work(cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { /* expected */ }

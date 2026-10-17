@@ -44,6 +44,39 @@ internal static class Program
                 Require(host.Coordinator.DoubleTapFullAcceptanceEnabled, "selection did not enable coordinator");
                 Require(host.SettingsStore.Load().AcceptSuggestionKey == "DoubleTap", "choice did not persist");
                 Console.WriteLine("SETTINGS_REAL_WINDOW_CHOICE_VISIBLE_SELECTED_PERSISTED=PASS");
+                ((ListBox)settings.FindName("NavList")).SelectedIndex = 5;
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                var logCombo = (ComboBox)settings.FindName("LogVerbosityCombo");
+                Require(logCombo.IsVisible, "log verbosity control not visible");
+                logCombo.SelectedIndex = 2;
+                Require(host.Settings.LogVerbosity == "warning" && host.SettingsStore.Load().LogVerbosity == "warning",
+                    "verbosity did not persist through actual UI");
+                logCombo.SelectedIndex = 0;
+                var batteryToggle = (CheckBox)settings.FindName("BatteryAwareToggle");
+                batteryToggle.IsChecked = true;
+                Require(host.Coordinator.BatteryAwareInference && host.SettingsStore.Load().BatteryAwareInference,
+                    "battery policy not wired/persisted");
+                ((Slider)settings.FindName("BatteryThresholdSlider")).Value = 50;
+                Require(host.Coordinator.BatteryThresholdPercent == 50 && host.SettingsStore.Load().BatteryThresholdPercent == 50,
+                    "battery threshold did not reach coordinator/store");
+                batteryToggle.IsChecked = false;
+                ((ListBox)settings.FindName("NavList")).SelectedIndex = 4;
+                var fieldToggle = (CheckBox)settings.FindName("SmarterFieldsToggle");
+                fieldToggle.IsChecked = true;
+                Require(host.SettingsStore.Load().SmarterFieldSuppression, "extra field protection not persisted");
+                fieldToggle.IsChecked = false;
+                ((ListBox)settings.FindName("NavList")).SelectedIndex = 6;
+                var statsToggle = (CheckBox)settings.FindName("SuggestionStatsToggle");
+                statsToggle.IsChecked = true;
+                Require(host.Statistics.Enabled && host.SettingsStore.Load().EnableSuggestionStatistics,
+                    "statistics toggle not wired/persisted");
+                host.Statistics.Record(Cotabby.Core.Suggestions.SuggestionStatistic.Triggered);
+                var clearButton = (Button?)settings.FindName("SuggestionStatsClearButton")
+                    ?? throw new InvalidOperationException("statistics clear button is missing");
+                clearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(host.Statistics.Snapshot().Values.All(count => count == 0), "statistics UI clear failed");
+                statsToggle.IsChecked = false;
+                Console.WriteLine("TABTYPE_PHASE1_REAL_SETTINGS_WIRING_PERSISTENCE_AND_CLEAR=PASS");
                 settings.Close();
 
                 var box = new TextBox { AcceptsReturn = true, Text = "seed ", FontSize = 18 };

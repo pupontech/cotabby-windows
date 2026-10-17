@@ -856,7 +856,18 @@ public partial class SettingsWindow : Window
 
     // ---------- Apps ----------
 
-    private void PopulateApps() => BuildBlockedAppRows();
+    private void PopulateApps()
+    {
+        SmarterFieldsToggle.IsChecked = _host.Settings.SmarterFieldSuppression;
+        BuildBlockedAppRows();
+    }
+
+    private void OnSmarterFieldsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.SmarterFieldSuppression = SmarterFieldsToggle.IsChecked == true;
+        _host.PersistSettings();
+    }
 
     private void BuildBlockedAppRows()
     {
@@ -936,11 +947,49 @@ public partial class SettingsWindow : Window
 
     private void PopulateAdvanced()
     {
+        BatteryAwareToggle.IsChecked = _host.Settings.BatteryAwareInference;
+        BatteryThresholdSlider.Value = Math.Clamp(_host.Settings.BatteryThresholdPercent, 5, 95);
+        RefreshBatteryStatus();
         DebounceSlider.Value = Math.Clamp(_host.Settings.DebounceMs, 20, 300);
         DebounceLabel.Text = $"{(int)DebounceSlider.Value} ms";
         SettingsPathText.Text = _host.SettingsStore.Path;
         ModelsPathText.Text = ModelCatalog.DefaultLocalDirectory();
         LogPathText.Text = @"C:\tmp\cotabby-live.log";
+        LogVerbosityCombo.SelectedIndex = _host.Settings.LogVerbosity?.ToLowerInvariant() switch
+        {
+            "debug" => 1, "warning" => 2, "error" => 3, _ => 0,
+        };
+    }
+
+    private void OnBatterySettingsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.BatteryAwareInference = BatteryAwareToggle.IsChecked == true;
+        _host.PersistSettings();
+        RefreshBatteryStatus();
+    }
+
+    private void OnBatteryThresholdChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_loaded) return;
+        _host.Settings.BatteryThresholdPercent = (int)BatteryThresholdSlider.Value;
+        _host.PersistSettings();
+        RefreshBatteryStatus();
+    }
+
+    private void OnRefreshBatteryStatus(object sender, RoutedEventArgs e) => RefreshBatteryStatus();
+
+    private void RefreshBatteryStatus()
+    {
+        if (BatteryPostureText is null) return;
+        BatteryPostureText.Text = $"Current posture: {_host.Coordinator.BatteryPosture}. Pause below {_host.Settings.BatteryThresholdPercent}% (refresh to update).";
+    }
+
+    private void OnLogVerbosityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded || LogVerbosityCombo.SelectedItem is not ComboBoxItem item) return;
+        _host.Settings.LogVerbosity = item.Tag as string ?? "information";
+        _host.PersistSettings();
     }
 
     private void OnDebounceChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -982,6 +1031,8 @@ public partial class SettingsWindow : Window
 
     private void PopulatePerformance()
     {
+        SuggestionStatsToggle.IsChecked = _host.Settings.EnableSuggestionStatistics;
+        RefreshSuggestionStats();
         PerfTrackToggle.IsChecked = _host.Settings.EnablePerformanceTracking;
         if (_host.PerformanceMetrics is { } metrics) metrics.TrackingEnabled = PerfTrackToggle.IsChecked == true;
         // No counter-category probe here: enumerating the "GPU Engine" set is a
@@ -996,6 +1047,25 @@ public partial class SettingsWindow : Window
         // one now would consume the tracker's baseline outside the sampling
         // window.
     }
+
+    private void OnSuggestionStatsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        _host.Settings.EnableSuggestionStatistics = SuggestionStatsToggle.IsChecked == true;
+        _host.PersistSettings();
+        RefreshSuggestionStats();
+    }
+
+    private void OnRefreshSuggestionStats(object sender, RoutedEventArgs e) => RefreshSuggestionStats();
+    private void OnClearSuggestionStats(object sender, RoutedEventArgs e)
+    {
+        _host.Statistics.Clear();
+        RefreshSuggestionStats();
+    }
+
+    private void RefreshSuggestionStats() => SuggestionStatsText.Text =
+        (_host.Statistics.Enabled ? "Recording — " : "Off — ") +
+        string.Join(" · ", _host.Statistics.Snapshot().Select(pair => $"{pair.Key}: {pair.Value}"));
 
     private void OnPerfTrackChanged(object sender, RoutedEventArgs e)
     {

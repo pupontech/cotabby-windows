@@ -1,81 +1,93 @@
 using System.IO;
+using System.Text;
+using Cotabby.Core.Support;
 using Microsoft.Extensions.Logging;
 
 namespace Cotabby.App.Hosting;
 
-/// <summary>
-/// Append-only single-file logger. Exists so detailed monitoring during
-/// diagnosis lands at a known path (<c>C:\tmp\cotabby-live.log</c>) without
-/// requiring the user to redirect stdout or launch via a shell. Kept minimal:
-/// no rotation, no batching, no async background flush — every Log call writes
-/// + flushes synchronously, gated by a single lock so multi-threaded callers
-/// produce non-interleaved lines.
-/// </summary>
+/// <summary>Bounded, sanitized, synchronous local diagnostics. IO failure disables this sink.</summary>
 public sealed class FileLoggerProvider : ILoggerProvider
 {
     private readonly string _path;
+    private readonly Func<LogLevel> _minimumLevel;
+    private readonly long _maxBytes;
+    private readonly int _maxFiles;
     private readonly object _gate = new();
     private StreamWriter? _writer;
+    private bool _disposed;
 
-    public FileLoggerProvider(string path)
+    public FileLoggerProvider(string path, Func<LogLevel>? minimumLevel = null,
+        long maxBytes = 8 * 1024 * 1024, int maxFiles = 3)
     {
         _path = path;
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        _writer = new StreamWriter(new FileStream(
-            path, FileMode.Append, FileAccess.Write, FileShare.Read))
-        { AutoFlush = true };
+        _minimumLevel = minimumLevel ?? (() => LogLevel.Information);
+        // A hand-edited zero/negative cap must not silently shrink the log to
+        // nothing; fall back to the shipped default instead.
+        _maxBytes = maxBytes <= 0 ? 8 * 1024 * 1024 : Math.Clamp(maxBytes, 256, 64 * 1024 * 1024);
+        _maxFiles = Math.Clamp(maxFiles, 1, 10);
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            Open();
+        }
+        catch (Exception) { Disable(); }
     }
 
-    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, _gate, _writer);
+    private void Open() => _writer = new StreamWriter(new FileStream(
+        _path, FileMode.Append, FileAccess.Write, FileShare.Read), new UTF8Encoding(false)) { AutoFlush = true };
+
+    private void Disable()
+    {
+        try { _writer?.Dispose(); } catch (Exception) { }
+        _writer = null;
+    }
+
+    private void Rotate()
+    {
+        _writer!.Dispose();
+        _writer = null;
+        for (int i = _maxFiles; i >= 1; i--)
+        {
+            string destination = _path + "." + i;
+            string source = i == 1 ? _path : _path + "." + (i - 1);
+            if (File.Exists(source)) File.Move(source, destination, overwrite: true);
+        }
+        Open();
+    }
+
+    public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName);
 
     public void Dispose()
     {
-        lock (_gate)
-        {
-            _writer?.Dispose();
-            _writer = null;
-        }
+        lock (_gate) { _disposed = true; Disable(); }
     }
 
-    private sealed class FileLogger : ILogger
+    private sealed class FileLogger(FileLoggerProvider owner, string category) : ILogger
     {
-        private readonly string _category;
-        private readonly object _gate;
-        private readonly StreamWriter? _writer;
-
-        public FileLogger(string category, object gate, StreamWriter? writer)
-        {
-            _category = category;
-            _gate = gate;
-            _writer = writer;
-        }
-
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => _writer is not null && logLevel >= LogLevel.Debug;
+        public bool IsEnabled(LogLevel level) => level != LogLevel.None && level >= owner._minimumLevel();
 
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state,
+        public void Log<TState>(LogLevel level, EventId eventId, TState state,
             Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            if (!IsEnabled(logLevel) || _writer is null) return;
-            var line = $"{DateTime.Now:HH:mm:ss.fff} {ShortLevel(logLevel)}: {_category}[{eventId.Id}] {formatter(state, exception)}";
-            if (exception is not null) line += $" :: {exception}";
-            lock (_gate)
+            if (!IsEnabled(level)) return;
+            lock (owner._gate)
             {
-                _writer.WriteLine(line);
+                if (owner._disposed || owner._writer is null) return;
+                try
+                {
+                    string line = SecretSanitizer.Sanitize($"{DateTime.Now:HH:mm:ss.fff} {level}: {category}[{eventId.Id}] {formatter(state, exception)}" +
+                        (exception is null ? "" : $" :: {exception}"));
+                    // A single huge record must not defeat the disk bound.
+                    if (Encoding.UTF8.GetByteCount(line + Environment.NewLine) > owner._maxBytes)
+                        line = "[oversized diagnostic suppressed]";
+                    int bytes = Encoding.UTF8.GetByteCount(line + Environment.NewLine);
+                    if (owner._writer.BaseStream.Length + bytes > owner._maxBytes) owner.Rotate();
+                    owner._writer!.WriteLine(line);
+                }
+                catch (Exception) { owner.Disable(); }
             }
         }
-
-        private static string ShortLevel(LogLevel l) => l switch
-        {
-            LogLevel.Trace => "trce",
-            LogLevel.Debug => "dbug",
-            LogLevel.Information => "info",
-            LogLevel.Warning => "warn",
-            LogLevel.Error => "fail",
-            LogLevel.Critical => "crit",
-            _ => "info",
-        };
     }
 }

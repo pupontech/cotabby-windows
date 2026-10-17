@@ -161,7 +161,28 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// "Pause in Low Power Mode" setting), an active energy-saver state pauses
     /// new requests. Null disables the check entirely. Mirrors upstream #812.
     /// </summary>
+    public SuggestionStatisticsStore? Statistics { get; set; }
     public ILowPowerModeProvider? LowPowerModePause { get; set; }
+    public Cotabby.Core.Support.IPowerSnapshotProvider? PowerProvider { get; set; }
+    public bool BatteryAwareInference { get; set; }
+    public int BatteryThresholdPercent { get; set; } = 40;
+    public TimeSpan? RequestDebounce { get; set; }
+    private Cotabby.Core.Support.InferencePosture _batteryPosture;
+    private readonly object _batteryGate = new();
+    /// <summary>Current posture. Hysteresis state is shared by the hook thread and
+    /// the settings UI, so the read-modify-write is serialized.</summary>
+    public Cotabby.Core.Support.InferencePosture BatteryPosture
+    {
+        get
+        {
+            lock (_batteryGate)
+            {
+                return _batteryPosture = Cotabby.Core.Support.BatteryPolicy.Evaluate(
+                    PowerProvider?.Snapshot ?? default, BatteryAwareInference,
+                    BatteryThresholdPercent, _batteryPosture);
+            }
+        }
+    }
 
     /// <summary>
     /// Per-request max-token overrides driven by the completion length preset.
@@ -446,8 +467,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             _logger.LogDebug("No focused field at trigger-decision time.");
             return;
         }
+        if (field.IsCredentialField && ev.IsKeyDown && ev.Kind == KeyKind.Character)
+        {
+            Statistics?.Record(SuggestionStatistic.SuppressedCredential);
+            return;
+        }
         if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
         {
+            Statistics?.Record(SuggestionStatistic.SuppressedBattery);
             _logger.LogDebug("Suggestions paused while Windows energy saver is on.");
             return;
         }
@@ -468,6 +495,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         // and the work function snapshots the *live* focus at debounce expiry.
         _logger.LogInformation("Triggering suggestion: host={Host} textLen={Len} caret={Caret}",
             field.ProcessName, field.Text.Length, field.CaretOffset);
+        Statistics?.Record(SuggestionStatistic.Triggered);
         TriggerGeneration(field);
     }
 
@@ -478,12 +506,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         // sign-in/verification field must never have its text built into a request.
         if (fieldAtTrigger.IsCredentialField)
         {
+            Statistics?.Record(SuggestionStatistic.SuppressedCredential);
             _logger.LogDebug("TriggerGeneration skipped: sign-in/verification field ({Host}).",
                 fieldAtTrigger.ProcessName);
             return;
         }
 
+        var posture = BatteryPosture;
+        if (posture == Cotabby.Core.Support.InferencePosture.Deferred)
+        {
+            Statistics?.Record(SuggestionStatistic.SuppressedBattery);
+            return;
+        }
+
         var reqId = "req_" + Guid.NewGuid().ToString("N")[..8];
+        Statistics?.Record(SuggestionStatistic.Requested);
         var pid = fieldAtTrigger.ProcessId;
         var metrics = PerformanceMetrics;
         var modelId = _runtimeModelId;
@@ -508,6 +545,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             request = request with { SingleLine = true };
         }
         var anchor = fieldAtTrigger.CaretRect;
+        request = request with { MaxTokens = Cotabby.Core.Support.BatteryPolicy.TokenBudget(
+            request.MaxTokens, posture, !request.SingleLine) };
         var element = fieldAtTrigger.ElementHandle;
         var field = fieldAtTrigger;
 
@@ -532,6 +571,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                 }
 
                 var sw = Stopwatch.StartNew();
+                Statistics?.Record(SuggestionStatistic.EngineFired);
                 string accumulated = string.Empty;
                 bool overlayShown = false;
                 bool requestPresented = false;
@@ -657,10 +697,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         SetHeldPresentation(accumulated);
                         _overlay.Show(accumulated, liveAnchor);
                         overlayShown = true;
+                        if (!requestPresented) Statistics?.Record(SuggestionStatistic.Presented);
                         requestPresented = true;
                         _logger.LogInformation(
-                            "Overlay shown req={ReqId} text=\"{Text}\" hex={Hex} anchor={X},{Y}",
-                            reqId, EscapeFull(accumulated), HexDump(accumulated),
+                            "Overlay shown req={ReqId} chars={Chars} anchor={X},{Y}",
+                            reqId, accumulated.Length,
                             (int)liveAnchor.X, (int)liveAnchor.Y);
                     }
                     else
@@ -677,10 +718,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                             _overlay.Update(accumulated);
                         }
                         else { SetHeldPresentation(accumulated); _overlay.Show(accumulated, _session.AnchorRect); overlayShown = true; }
+                        if (!requestPresented) Statistics?.Record(SuggestionStatistic.Presented);
                         requestPresented = true;
                         _logger.LogInformation(
-                            "Overlay updated req={ReqId} text=\"{Text}\" hex={Hex}",
-                            reqId, EscapeFull(accumulated), HexDump(accumulated));
+                            "Overlay updated req={ReqId} chars={Chars}",
+                            reqId, accumulated.Length);
                     }
 
                     RecordLatencyIfReady();
@@ -716,7 +758,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     _inFlightRequestId = null;
                 });
             }
-        });
+        }, debounce: RequestDebounce is TimeSpan baseline
+            ? Cotabby.Core.Support.BatteryPolicy.Debounce(baseline, posture) : null);
     }
 
     private void PostAcceptIntent(AcceptIntent intent)
@@ -862,6 +905,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         }
 
         var completion = new TaskCompletionSource<AcceptanceIntentStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool completed = false;
         try
         {
             _ui.Post(async _ =>
@@ -881,13 +925,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     completion.TrySetResult(AcceptanceIntentStatus.InsertionFaulted);
                 }
             }, null);
+            // A dispatcher that stops servicing posts must not hold a captured
+            // key forever. Bounded wait, then an honest terminal outcome.
+            completed = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(2), cancellationToken)).ConfigureAwait(false) == completion.Task;
+            if (!completed) return AcceptanceIntentStatus.DispatchFailed;
+            return await completion.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return AcceptanceIntentStatus.InsertionCancelled;
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Could not dispatch a captured accept intent (type={ExceptionType}).", ex.GetType().Name);
             return AcceptanceIntentStatus.DispatchFailed;
         }
-        return await completion.Task.ConfigureAwait(false);
     }
 
     private async Task<AcceptanceIntentStatus> AcceptIntentAsync(
@@ -985,11 +1037,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     .ConfigureAwait(false);
                 if (!inserted)
                 {
+                    Statistics?.Record(SuggestionStatistic.InsertionRejected);
                     await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
                     _logger.LogWarning("Accept insertion returned false; session was not advanced or armed.");
                     return AcceptanceIntentStatus.InsertionRejected;
                 }
                 insertionLanded = true;
+                Statistics?.Record(whole ? SuggestionStatistic.AcceptedWhole :
+                    AcceptanceGranularity == "phrase" ? SuggestionStatistic.AcceptedPhrase : SuggestionStatistic.AcceptedWord);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1112,6 +1167,22 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             : AcceptanceIntentStatus.StateCommitted;
     }
 
+    /// <summary>
+    /// The exhaustion continuation cannot know what the user pressed after the
+    /// final accept, so the gate is evaluated with a neutral printable key event.
+    /// It still carries the focused field, modifiers and process, which is what
+    /// every SuggestionAvailability rule needs; blocked/credential/self/empty
+    /// fields are refused before any request is built.
+    /// </summary>
+    private static readonly KeyboardEvent ContinuationKeyEvent = new()
+    {
+        Kind = KeyKind.Character,
+        Character = '\0',
+        HasNonShiftModifier = false,
+        HasShiftModifier = false,
+        IsKeyDown = true,
+    };
+
     private static bool IsSameAcceptanceBase(SuggestionSession current, SuggestionSession expected) =>
         current.RequestId == expected.RequestId
         && current.ConsumedChars == expected.ConsumedChars
@@ -1199,7 +1270,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     _heldPresentationText = null;
                 }
             }
-            else if (exhausted && _enabled && _session is null)
+            else if (exhausted && _enabled && _session is null
+                && SuggestionAvailability.ShouldRequest(after, ContinuationKeyEvent, BlockedApps))
             {
                 TriggerGeneration(after);
             }
@@ -1211,6 +1283,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _doubleTapAcceptanceState.Reset();
         CompletePendingAcceptanceIntents(AcceptanceIntentStatus.IntentInvalidated);
         if (_session is null && !_generationInFlight) return;
+        Statistics?.Record(reason is "accepted" or "consumed" ? SuggestionStatistic.Exhausted : SuggestionStatistic.Cancelled);
         _logger.LogInformation("Cancel session ({Reason}).", reason);
         _session = null;
         _sessionPid = 0;
@@ -1255,51 +1328,6 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void SetHeldPresentation(string text)
     {
         _heldPresentationText = text;
-    }
-
-    private static string Preview(string s) => s.Length <= 40 ? s : s[..40] + "…";
-
-    /// <summary>
-    /// Escape control chars and newlines so a single-line log entry shows the
-    /// FULL string verbatim. Used by the detailed-monitoring path so we can
-    /// reconstruct exactly what the engine produced vs what the inserter sent
-    /// vs what the host received.
-    /// </summary>
-    private static string EscapeFull(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return s;
-        var sb = new System.Text.StringBuilder(s.Length + 8);
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                case '"':  sb.Append("\\\""); break;
-                case '\\': sb.Append("\\\\"); break;
-                default:
-                    if (c < 0x20 || c == 0x7F) sb.Append($"\\x{(int)c:X2}");
-                    else sb.Append(c);
-                    break;
-            }
-        }
-        return sb.ToString();
-    }
-
-    /// <summary>UTF-16 hex dump of <paramref name="s"/>. Lets us spot doubled
-    /// chars, invisible whitespace, or off-by-one differences between snapshot
-    /// and inserter at a glance.</summary>
-    private static string HexDump(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "";
-        var sb = new System.Text.StringBuilder(s.Length * 5);
-        for (int i = 0; i < s.Length; i++)
-        {
-            if (i > 0) sb.Append(' ');
-            sb.Append(((int)s[i]).ToString("X4"));
-        }
-        return sb.ToString();
     }
 
     /// <summary>True if the tail of <paramref name="s"/> ends with 5+ identical
@@ -1361,8 +1389,14 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private void Post(Action action)
     {
         if (_disposed) return;
-        if (SynchronizationContext.Current == _ui) action();
-        else _ui.Post(_ => { if (!_disposed) action(); }, null);
+        if (SynchronizationContext.Current == _ui) { action(); return; }
+        try { _ui.Post(_ => { if (!_disposed) action(); }, null); }
+        catch (Exception ex)
+        {
+            // Never let a dispatcher hop throw on the hook thread; the hook's
+            // handler would pass the key through and the caller cannot know.
+            _logger.LogWarning("Could not dispatch coordinator work (type={ExceptionType}).", ex.GetType().Name);
+        }
     }
 
     private Task PostAsync(Action action)
