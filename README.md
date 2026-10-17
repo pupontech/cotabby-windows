@@ -166,6 +166,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Opt-in typing history ([upstream #841](https://github.com/FuJacob/cotabby/commit/c3d17c1a6f709d8181a8d888f33e23f03014c428)) | ❌ deliberately not ported; storing user text on disk needs a separate privacy decision |
 | Constrained greedy decode (top-20 argmax, no-repeat-3-gram, sentence stops) | ✅ |
 | One-shot output normalizer (echo strip, dup filter, safety gate) | ✅ |
+| Repetitive-output content rule (selective upstream port; unreleased) | Rejects consecutive one-to-three-word loops repeated three times; allows two-copy emphasis. [Scope and owner test](docs/upstream-repetitive-output.md) |
 | Fill-in-middle for mid-line carets | ✅ (Qwen3.5 models)       |
 | Word-by-word / phrase acceptance   | ✅ (`Tab`, mode in Shortcuts) |
 | Accept-whole key                   | ✅ (`` ` `` backtick default) |

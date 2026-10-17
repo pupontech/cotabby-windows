@@ -9,7 +9,7 @@ the Windows implementation stable.
 - Windows fork: [pupontech/cotabby-windows](https://github.com/pupontech/cotabby-windows)
 - Windows source port: [Msde-7/cotabby-windows](https://github.com/Msde-7/cotabby-windows)
 - Original macOS project: [FuJacob/cotabby](https://github.com/FuJacob/cotabby)
-- Current Windows baseline: commit `8c0bcd2` (v0.5.0; base for the next port round)
+- Current Windows baseline: commit `ad95b52` (v0.5.1; base for the next port round)
 - The original repository has a separate history and must not be merged wholesale into the Windows branch.
 
 ## Objective
@@ -56,6 +56,15 @@ matching upstream. Live GPU numbers and per-adapter behaviour remain owner
 gated.
 
 ## Selective Windows-source updates
+
+Both upstream tips were fetched for this round: original `8cdbea2` and Windows
+parent `b1e4031` are unchanged since the previous assessment. The remaining
+backlog is not empty: the new focused port adapts only the visible-word loop
+rule from `CompletionContentPolicy` (Windows `ff381f5`), integrating it into
+the existing normalizer rather than importing the parent's pipeline rewrite.
+Status: implemented, unreleased; [scope and tests](docs/upstream-repetitive-output.md).
+Other content-policy rules remain unported. Separate TabType/audit branches
+are not part of this upstream work.
 
 The Windows parent advanced to `b1e4031c70aca1be21aae2c57b138fde5fc22bb1`.
 For v0.5.1, only model-download hardening from `e625947` is adapted, with

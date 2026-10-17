@@ -108,6 +108,89 @@ public class DegenerationGuardSmokeTests
         Assert.Equal("next words", r.Text);
     }
 
+    [Fact]
+    public void Normalizer_SuppressesVisibleWordLoop()
+    {
+        var result = SuggestionTextNormalizer.Normalize(
+            "no no no", prompt: "", precedingText: "say ", trailingText: "", singleLine: true);
+
+        Assert.True(result.IsSuppressed);
+        Assert.Equal(SuppressionReason.RepetitiveContent, result.Reason);
+    }
+
+    [Theory]
+    [InlineData("No no NO")]
+    [InlineData("over and over and over and")]
+    [InlineData("one two three one two three one two three")]
+    [InlineData("intro Hi S. Hi S. Hi S. ending")]
+    [InlineData("hello\thello\thello")]
+    [InlineData("été\u00a0ÉTÉ\u2003été")]
+    [InlineData("שלום שלום שלום")]
+    [InlineData("1 2 1 2 1 2")]
+    public void Normalizer_SuppressesShortConsecutiveWordLoops(string raw)
+    {
+        Assert.True(RepetitionGuard.HasWordLoop(raw));
+        var result = SuggestionTextNormalizer.Normalize(
+            raw, prompt: "", precedingText: "context ", trailingText: "", singleLine: true);
+        Assert.Equal(string.Empty, result.Text);
+        Assert.Equal(SuppressionReason.RepetitiveContent, result.Reason);
+    }
+
+    [Theory]
+    [InlineData("very very good")]
+    [InlineData("over and over and")]
+    [InlineData("one two three one two three")]
+    [InlineData("day after day, week after week")]
+    [InlineData("no no yes no no")]
+    [InlineData("one two three four one two three four one two three four")]
+    [InlineData("no no no.")]
+    [InlineData("普通的句子没有空格")]
+    public void Normalizer_KeepsNonLoopingContent(string raw)
+    {
+        Assert.False(RepetitionGuard.HasWordLoop(raw));
+        var result = SuggestionTextNormalizer.Normalize(
+            raw, prompt: "", precedingText: "context ", trailingText: "", singleLine: true);
+        Assert.Equal(raw, result.Text);
+        Assert.Equal(SuppressionReason.None, result.Reason);
+    }
+
+    [Theory]
+    [InlineData("", SuppressionReason.EmptyGeneration)]
+    [InlineData("   ", SuppressionReason.EmptyGeneration)]
+    [InlineData("no no no\u0001", SuppressionReason.RepetitiveContent)]
+    [InlineData("no no\u0001 no", SuppressionReason.UnsafeToInsert)]
+    public void Normalizer_PreservesSafetyPrecedence(string raw, SuppressionReason expected)
+    {
+        var result = SuggestionTextNormalizer.Normalize(
+            raw, prompt: "", precedingText: "context ", trailingText: "", singleLine: true);
+        Assert.True(result.IsSuppressed);
+        Assert.Equal(expected, result.Reason);
+    }
+
+    [Fact]
+    public void Normalizer_ChecksOnlyTheRetainedLine()
+    {
+        var result = SuggestionTextNormalizer.Normalize(
+            "ordinary prose\nno no no", prompt: "", precedingText: "context ", trailingText: "", singleLine: true);
+        Assert.Equal("ordinary prose", result.Text);
+    }
+
+    [Fact]
+    public void Normalizer_DetectsLoopsAcrossRetainedLines()
+    {
+        var result = SuggestionTextNormalizer.Normalize(
+            "go now\ngo now\ngo now", prompt: "", precedingText: "context ", trailingText: "", singleLine: false);
+        Assert.Equal(SuppressionReason.RepetitiveContent, result.Reason);
+    }
+
+    [Fact]
+    public void Normalizer_RemovesPromptEchoBeforeCheckingLoops()
+    {
+        var result = SuggestionTextNormalizer.Normalize(
+            "no no no useful continuation", prompt: "no no no", precedingText: "context ", trailingText: "", singleLine: true);
+        Assert.Equal("useful continuation", result.Text);
+    }
+
     // ---- Sentence boundary --------------------------------------------------
 
     [Theory]
