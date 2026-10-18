@@ -1,14 +1,17 @@
 # TabType Phase 2 — per-app profiles
 
 Status: implemented on `feat/tabtype-per-app-profiles`, based on Phase 1
-`d10b9c2`. Parent verification: 439 Core tests pass; Windows-targeted App and
-RegressionSmoke builds pass with zero warnings/errors. Final independent review
-and Windows workflow/runtime proof are pending. This is not a tagged release or
-a statement of live Windows acceptance. Remaining Phase 2 features are separate.
+`d10b9c2`. Verification: 440 Core + 4 Win32 tests, real Windows Settings controls
+and persistence, credential UIA, insertion/hook fixtures, packaging and CPU native
+loading passed on the feature branch. Independent source review completed; its
+missing-caption-resource finding was fixed and regression-tested. Exact commit,
+workflow and artifact evidence are recorded on PR #11. This is an unmerged test
+build, not a tagged release or a claim of owner live acceptance. Remaining Phase 2
+features are separate.
 
 ## Contract
 
-Settings → Apps will let a user add, edit and remove process-specific overrides.
+Settings → Apps lets a user add, edit and remove process-specific overrides.
 Profiles contain configuration only, never field text. The empty/default profile
 collection preserves the global settings. Existing settings files need no migration.
 
@@ -32,9 +35,11 @@ or bypass energy-saver/battery deferral. They do not change the global shortcut
 or emoji configuration. Target and effective-settings transitions must retire
 obsolete suggestions and work so a late result cannot appear in another field.
 
-Display modes need real rendering evidence; storing the value alone does not
-satisfy this contract. The implementation and final Windows proof determine
-which rendering semantics are accepted; no full TabType visual parity is claimed.
+Display modes share the existing non-activating, caret-anchored overlay. `auto`
+and `inline` retain the transparent ghost-text presentation; `popup` adds a
+system-theme-matched background and spacing at the same anchor. It is not a
+separate candidate picker or repositioned rich popup. Physical visual checks
+remain owner testing; no full TabType visual parity is claimed.
 
 ## Verification gates
 
