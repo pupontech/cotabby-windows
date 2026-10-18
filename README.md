@@ -179,7 +179,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | First-run welcome wizard (template cards) | ✅                 |
 | Inline `:emoji:` autocomplete      | ✅ (built-in catalog)     |
 | Per-app blocklist                  | ✅                        |
-| Per-app suggestion profiles (TabType Phase 2) | Implemented on `feat/tabtype-per-app-profiles`; 440 Core + 4 Win32 tests, real Windows Settings proof and independent review completed. Unmerged test build, not released or owner live-accepted. [Scope](docs/tabtype-per-app-profiles.md) |
+| Per-app suggestion profiles (TabType Phase 2) | Implemented on `feat/tabtype-per-app-profiles`; Core/Win32 suites, real Windows Settings proof and independent review completed. Unmerged test build, not released or owner live-accepted. [Scope](docs/tabtype-per-app-profiles.md) |
 | Launch at login                    | ✅ (HKCU Run key)         |
 | Completion length presets (2–4 / 4–7 / 7–12 / 12–20 words) | ✅ |
 | GPU offload                        | ✅ Vulkan (vs Metal)      |

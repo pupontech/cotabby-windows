@@ -8,6 +8,53 @@ namespace Cotabby.Core.Tests;
 public sealed class DoubleTapSettingsTests
 {
     [Fact]
+    public void SettingsStoreLoadSkipsMalformedProfileAndPreservesGlobalSafetySettings()
+    {
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"cotabby-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(settingsPath,
+                "{\"Enabled\":false,\"BlockedApps\":[\"password-manager\"],\"AppProfiles\":[{\"ProcessName\":\"notepad\",\"DebounceMs\":\"bad\"},{\"ProcessName\":42},{\"ProcessName\":\"word\",\"Enabled\":\"false\"},4,[],null,{\"ProcessName\":\"code\",\"Enabled\":true}]}");
+
+            var loaded = new SettingsStore(settingsPath).Load();
+
+            Assert.False(loaded.Enabled);
+            Assert.Equal(new[] { "password-manager" }, loaded.BlockedApps);
+            Assert.Collection(loaded.AppProfiles!, profile => Assert.Null(profile), profile =>
+            {
+                Assert.NotNull(profile);
+                Assert.Equal("code", profile.ProcessName);
+                Assert.True(profile.Enabled);
+            });
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+    }
+
+    [Fact]
+    public void SettingsStoreLoadIgnoresMalformedProfileContainerAndPreservesGlobalSafetySettings()
+    {
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"cotabby-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(settingsPath,
+                "{\"Enabled\":false,\"BlockedApps\":[\"password-manager\"],\"AppProfiles\":{\"ProcessName\":\"notepad\"}}");
+
+            var loaded = new SettingsStore(settingsPath).Load();
+
+            Assert.False(loaded.Enabled);
+            Assert.Equal(new[] { "password-manager" }, loaded.BlockedApps);
+            Assert.Empty(loaded.AppProfiles!);
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+    }
+
+    [Fact]
     public void AppProfilesAreAdditiveAndRoundTripIncludingNullEntries()
     {
         var legacy = JsonSerializer.Deserialize<AppSettings>("{}")!;

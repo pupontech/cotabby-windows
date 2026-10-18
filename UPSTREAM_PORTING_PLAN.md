@@ -41,9 +41,9 @@ Bring high-value, compatible improvements from the original Cotabby project into
 
 Phase 2 first slice: per-app profiles are implemented on
 `feat/tabtype-per-app-profiles`, based on merged Phase 1 `d10b9c2` (PR #11).
-440 Core + 4 Win32 tests, actual Windows Settings proof, package/native checks
-and independent source review completed. The missing caption-resource finding
-was fixed with a regression. [Contract and verification](docs/tabtype-per-app-profiles.md).
+Core/Win32 suites, actual Windows Settings proof, package/native checks
+and independent source review completed. Missing caption resources and the
+malformed-profile whole-settings reset were fixed with regressions. [Contract and verification](docs/tabtype-per-app-profiles.md).
 No Phase 2 release or live acceptance is implied. Insertion strategies,
 acceptance retention, confidence gating and prediction caching remain separate
 planned changes.

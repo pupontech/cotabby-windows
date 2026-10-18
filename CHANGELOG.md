@@ -4,9 +4,10 @@
 
 - Per-app suggestion profiles: nullable behavior overrides with global safety
   gates retained, an Apps-pane editor, and stale-target retirement. Verification:
-  440 Core + 4 Win32 tests and Windows real-window settings/insertion/privacy
-  proofs passed. Independent review completed and its missing-caption-resource
-  finding was fixed with a regression. Not published or owner live-accepted.
+  Core/Win32 suites and Windows real-window settings/insertion/privacy
+  proofs passed. Independent review completed; the missing-caption resource
+  and malformed-profile whole-settings reset were fixed with regressions.
+  Not published or owner live-accepted.
   See [contract and verification gates](docs/tabtype-per-app-profiles.md).
 
 ## 0.6.0 — 2026-10-17

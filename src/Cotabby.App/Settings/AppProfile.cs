@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Cotabby.App.Settings;
 
 /// <summary>
@@ -15,4 +18,55 @@ public sealed class AppProfile
     public int? DebounceMs { get; set; }
     public int? MaxTokensSingleLine { get; set; }
     public int? MaxTokensMultiLine { get; set; }
+}
+
+public sealed class AppProfileListJsonConverter : JsonConverter<List<AppProfile?>>
+{
+    public override List<AppProfile?> Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray)
+        {
+            using var malformedContainer = JsonDocument.ParseValue(ref reader);
+            return new List<AppProfile?>();
+        }
+
+        var profiles = new List<AppProfile?>();
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndArray) return profiles;
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                profiles.Add(null);
+                continue;
+            }
+
+            using var entry = JsonDocument.ParseValue(ref reader);
+            if (entry.RootElement.ValueKind != JsonValueKind.Object) continue;
+
+            try
+            {
+                profiles.Add(entry.RootElement.Deserialize<AppProfile>(options));
+            }
+            catch (JsonException)
+            {
+                // Ignore a malformed profile without discarding the rest of settings.
+            }
+        }
+
+        throw new JsonException("AppProfiles array was not terminated.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        List<AppProfile?> value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var profile in value)
+            JsonSerializer.Serialize(writer, profile, options);
+        writer.WriteEndArray();
+    }
 }

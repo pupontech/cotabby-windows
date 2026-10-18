@@ -1,7 +1,7 @@
 # TabType Phase 2 — per-app profiles
 
 Status: implemented on `feat/tabtype-per-app-profiles`, based on Phase 1
-`d10b9c2`. Verification: 440 Core + 4 Win32 tests, real Windows Settings controls
+`d10b9c2`. Verification: Core and Win32 suites, real Windows Settings controls
 and persistence, credential UIA, insertion/hook fixtures, packaging and CPU native
 loading passed on the feature branch. Independent source review completed; its
 missing-caption-resource finding was fixed and regression-tested. Exact commit,
@@ -26,7 +26,12 @@ paths or wildcard expressions. The editor may trim user input and remove `.exe`;
 the runtime accepts only the stored base-name representation. Duplicate keys
 are rejected by the editor. Ambiguous valid duplicate keys loaded from JSON
 use global settings rather than choosing an override by list order. Invalid
-profiles and null entries are ignored. Numeric ranges are 20–300 ms debounce,
+profiles and null entries are ignored by resolution. Wrong-typed profile objects
+and non-object entries are skipped individually while loading, preserving valid
+global disable/blocklist settings and valid sibling profiles. A non-array profile
+container is ignored. This tolerance does not repair syntactically invalid JSON;
+the pre-existing whole-document fallback remains for an unreadable/broken settings
+file. Numeric ranges are 20–300 ms debounce,
 4–96 single-line tokens and 4–128 multiline tokens.
 
 Profiles cannot enable a globally disabled application, override the blocklist,

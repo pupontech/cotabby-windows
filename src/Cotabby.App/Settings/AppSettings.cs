@@ -78,6 +78,7 @@ public sealed class AppSettings
     public List<string> BlockedApps { get; set; } = new();
 
     /// <summary>Optional per-process overrides. Missing or null entries inherit globals.</summary>
+    [JsonConverter(typeof(AppProfileListJsonConverter))]
     public List<AppProfile?>? AppProfiles { get; set; } = new();
 
     // ---- Advanced -------------------------------------------------------
@@ -169,6 +170,12 @@ public sealed class SettingsStore
             "Cotabby");
         Directory.CreateDirectory(dir);
         Path = System.IO.Path.Combine(dir, "settings.json");
+    }
+
+    public SettingsStore(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        Path = path;
     }
 
     public AppSettings Load()
