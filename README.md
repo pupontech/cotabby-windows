@@ -179,6 +179,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | First-run welcome wizard (template cards) | ✅                 |
 | Inline `:emoji:` autocomplete      | ✅ (built-in catalog)     |
 | Per-app blocklist                  | ✅                        |
+| Per-app suggestion profiles (TabType Phase 2) | In development on `feat/tabtype-per-app-profiles`; not released or live-accepted. [Contract and verification gates](docs/tabtype-per-app-profiles.md) |
 | Launch at login                    | ✅ (HKCU Run key)         |
 | Completion length presets (2–4 / 4–7 / 7–12 / 12–20 words) | ✅ |
 | GPU offload                        | ✅ Vulkan (vs Metal)      |

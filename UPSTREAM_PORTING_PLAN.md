@@ -39,6 +39,13 @@ Bring high-value, compatible improvements from the original Cotabby project into
 | Held-presentation rapid-Tab acceptance | [#838 / `7724926`](https://github.com/FuJacob/cotabby/commit/7724926b3e93f14e3b576ba46ff52c4f64d9712d) | Merged PR #6, shipped in v0.5.0. Coordinator presentation mark; live rapid-Tab behavior owner-verified. |
 | TabType Phase 1: bounded sanitized diagnostics, extra field protection, battery posture, count-only statistics | none (this fork's `openspec/audit/` plan) | Implemented on `feat/tabtype-integration` (PR #10). 418 Core tests; Windows-targeted builds clean; real Settings window exercised on Windows CI. Risky behavior opt-in. Live battery/energy-saver, physical keys and browser credential recall owner-verified. |
 
+Phase 2 first slice: per-app profiles are in development on
+`feat/tabtype-per-app-profiles`, based on merged Phase 1 `d10b9c2`.
+[Contract and verification gates](docs/tabtype-per-app-profiles.md).
+No Phase 2 release or live acceptance is implied. Insertion strategies,
+acceptance retention, confidence gating and prediction caching remain separate
+planned changes.
+
 See [the implementation and acceptance note](docs/upstream-output-budget.md).
 The adaptation counts actual loaded-model tokens rather than porting the Swift
 estimator; FIM uses the loaded context too. No new UI/settings, model catalog,

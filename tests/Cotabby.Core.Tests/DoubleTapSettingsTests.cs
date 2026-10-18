@@ -7,6 +7,23 @@ namespace Cotabby.Core.Tests;
 
 public sealed class DoubleTapSettingsTests
 {
+    [Fact]
+    public void AppProfilesAreAdditiveAndRoundTripIncludingNullEntries()
+    {
+        var legacy = JsonSerializer.Deserialize<AppSettings>("{}")!;
+        Assert.Empty(legacy.AppProfiles!);
+
+        var loaded = JsonSerializer.Deserialize<AppSettings>(
+            "{\"AppProfiles\":[null,{\"ProcessName\":\"notepad\",\"Enabled\":false,\"AcceptanceMode\":\"phrase\"}]}")!;
+        var saved = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(loaded))!;
+
+        Assert.Equal(2, saved.AppProfiles!.Count);
+        Assert.Null(saved.AppProfiles[0]);
+        Assert.Equal("notepad", saved.AppProfiles[1]!.ProcessName);
+        Assert.False(saved.AppProfiles[1]!.Enabled);
+        Assert.Equal("phrase", saved.AppProfiles[1]!.AcceptanceMode);
+    }
+
     [Theory]
     [InlineData("{}")]
     [InlineData("{\"Enabled\":true,\"AcceptWordKey\":\"Tab\"}")]

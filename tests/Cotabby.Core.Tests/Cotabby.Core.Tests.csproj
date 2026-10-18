@@ -28,6 +28,8 @@
     <Compile Include="..\..\src\Cotabby.App\Hosting\SanitizingLoggerProvider.cs" Link="SanitizingLoggerProvider.cs" />
     <Compile Include="..\..\src\Cotabby.App\Hosting\FileLoggerProvider.cs" Link="FileLoggerProvider.cs" />
     <Compile Include="..\..\src\Cotabby.App\Settings\AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="..\..\src\Cotabby.App\Settings\AppProfile.cs" Link="AppProfile.cs" />
+    <Compile Include="..\..\src\Cotabby.App\Settings\AppProfileSettingsMapper.cs" Link="AppProfileSettingsMapper.cs" />
     <EmbeddedResource Include="..\..\src\Cotabby.App\UI\SettingsWindow.xaml">
       <LogicalName>Cotabby.SettingsWindow.xaml</LogicalName>
     </EmbeddedResource>

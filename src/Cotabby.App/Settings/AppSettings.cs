@@ -77,6 +77,9 @@ public sealed class AppSettings
     /// </summary>
     public List<string> BlockedApps { get; set; } = new();
 
+    /// <summary>Optional per-process overrides. Missing or null entries inherit globals.</summary>
+    public List<AppProfile?>? AppProfiles { get; set; } = new();
+
     // ---- Advanced -------------------------------------------------------
     public bool SmarterFieldSuppression { get; set; }
     public bool EnableSuggestionStatistics { get; set; }

@@ -77,6 +77,79 @@ internal static class Program
                 Require(host.Statistics.Snapshot().Values.All(count => count == 0), "statistics UI clear failed");
                 statsToggle.IsChecked = false;
                 Console.WriteLine("TABTYPE_PHASE1_REAL_SETTINGS_WIRING_PERSISTENCE_AND_CLEAR=PASS");
+                ((ListBox)settings.FindName("NavList")).SelectedIndex = 4;
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                T Control<T>(string name) where T : FrameworkElement => (T)settings.FindName(name);
+                void Click(string name) => Control<Button>(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                void Choose(string name, string tag)
+                {
+                    var control = Control<ComboBox>(name);
+                    control.SelectedItem = control.Items.Cast<ComboBoxItem>().Single(item => (string)item.Tag == tag);
+                }
+                var processBox = Control<TextBox>("ProfileProcessBox");
+                processBox.BringIntoView();
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Require(processBox.IsVisible && processBox.ActualWidth > 0, "profile editor is not rendered");
+                Click("ProfileNewButton");
+                processBox.Text = " profile-fixture.EXE ";
+                Choose("ProfileEnabledCombo", "true");
+                Choose("ProfileAcceptanceCombo", "phrase");
+                Choose("ProfileLengthCombo", "short");
+                Choose("ProfileDisplayCombo", "popup");
+                Choose("ProfileMultilineCombo", "false");
+                Control<TextBox>("ProfileDebounceBox").Text = "120";
+                Control<TextBox>("ProfileSingleTokensBox").Text = "12";
+                Control<TextBox>("ProfileMultiTokensBox").Text = "24";
+                Click("ProfileSaveButton");
+                var saved = host.SettingsStore.Load().AppProfiles!.Single(p => p?.ProcessName == "profile-fixture")!;
+                Require(saved.AcceptanceMode == "phrase" && saved.CompletionLengthPreset == "short"
+                    && saved.DisplayMode == "popup" && saved.Enabled == true && saved.AllowMultiLine == false
+                    && saved.DebounceMs == 120 && saved.MaxTokensSingleLine == 12 && saved.MaxTokensMultiLine == 24,
+                    "profile controls did not persist every override");
+                var mapped = Cotabby.App.Settings.AppProfileSettingsMapper.Map(host.SettingsStore.Load());
+                var effective = Cotabby.Core.Settings.AppProfileResolver.Resolve(mapped.Global, mapped.Profiles, "PROFILE-FIXTURE", "Cotabby");
+                Require(effective.AcceptanceMode == "phrase" && effective.MaxTokensSingleLine == 12 && effective.DebounceMs == 120,
+                    "saved profile did not resolve to effective behavior");
+                Click("ProfileNewButton");
+                processBox.Text = "PROFILE-FIXTURE";
+                Click("ProfileSaveButton");
+                Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0
+                    && host.Settings.AppProfiles!.Count(p => p is not null) == 1, "duplicate key was accepted");
+                processBox.Text = "C:\\bad\\process";
+                Click("ProfileSaveButton");
+                Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0, "path key was accepted");
+                processBox.Text = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+                Click("ProfileSaveButton");
+                Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0, "self profile was accepted");
+                var profileList = Control<ListBox>("AppProfileList");
+                profileList.SelectedIndex = 0;
+                Require(processBox.Text == "profile-fixture" && Control<TextBox>("ProfileDebounceBox").Text == "120",
+                    "selecting profile did not load editor");
+                Choose("ProfileEnabledCombo", "false");
+                Click("ProfileSaveButton");
+                Require(host.SettingsStore.Load().AppProfiles!.Single()!.Enabled == false, "profile edit was not saved");
+                Choose("ProfileEnabledCombo", "");
+                Choose("ProfileAcceptanceCombo", "");
+                Choose("ProfileLengthCombo", "");
+                Choose("ProfileDisplayCombo", "");
+                Choose("ProfileMultilineCombo", "");
+                Control<TextBox>("ProfileDebounceBox").Text = "301";
+                Click("ProfileSaveButton");
+                Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0
+                    && host.SettingsStore.Load().AppProfiles!.Single()!.DebounceMs == 120,
+                    "invalid range changed persisted profile");
+                Control<TextBox>("ProfileDebounceBox").Text = "";
+                Control<TextBox>("ProfileSingleTokensBox").Text = "";
+                Control<TextBox>("ProfileMultiTokensBox").Text = "";
+                Click("ProfileSaveButton");
+                saved = host.SettingsStore.Load().AppProfiles!.Single()!;
+                Require(saved.Enabled is null && saved.AcceptanceMode is null && saved.CompletionLengthPreset is null
+                    && saved.DisplayMode is null && saved.AllowMultiLine is null && saved.DebounceMs is null
+                    && saved.MaxTokensSingleLine is null && saved.MaxTokensMultiLine is null, "inherit reset did not persist nulls");
+                Click("ProfileRemoveButton");
+                Require(host.SettingsStore.Load().AppProfiles!.Count == 0 && profileList.Items.Count == 0,
+                    "remove did not persist or refresh profile rows");
+                Console.WriteLine("TABTYPE_PROFILE_REAL_SETTINGS_ADD_EDIT_REMOVE_VALIDATION_INHERIT_PERSISTENCE=PASS");
                 settings.Close();
 
                 var box = new TextBox { AcceptsReturn = true, Text = "seed ", FontSize = 18 };
