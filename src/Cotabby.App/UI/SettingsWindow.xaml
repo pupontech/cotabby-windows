@@ -709,7 +709,7 @@
                     <TextBlock Style="{StaticResource CardHeader}" Text="Per-app suggestion profiles" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Style="{StaticResource SubLabel}" TextWrapping="Wrap" Text="Override suggestion behavior by process name. Unset values inherit global settings. Disabled apps and privacy protections always win." />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Text="Override suggestion behavior by process name. Unset values inherit global settings. Disabled apps and privacy protections always win." />
                             <ListBox x:Name="AppProfileList" MaxHeight="130" Margin="0,8,0,8" DisplayMemberPath="ProcessName" SelectionChanged="OnAppProfileSelected" />
                             <TextBlock Text="Process name (for example notepad)" />
                             <TextBox x:Name="ProfileProcessBox" Style="{StaticResource Input}" Margin="0,4,0,8" />
