@@ -3,10 +3,9 @@ using Cotabby.Core.Focus;
 namespace Cotabby.Core.Insertion;
 
 /// <summary>
-/// Inserts a string of text into the currently focused field. Implementations
-/// prefer UIA <c>TextPattern.InsertText</c> when supported, falling back to
-/// synthesized keystrokes (<c>SendInput</c>) for fields that don't expose the
-/// pattern (Chrome, Electron apps, raw Win32 edits, …).
+/// Inserts a string of text into the currently focused field. The Windows
+/// implementation uses Unicode SendInput or clipboard paste; it does not write
+/// through UI Automation text or value patterns.
 /// </summary>
 public interface ITextInserter
 {

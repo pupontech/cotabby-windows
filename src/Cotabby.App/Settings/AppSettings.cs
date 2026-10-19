@@ -86,6 +86,9 @@ public sealed class AppSettings
     public bool EnableSuggestionStatistics { get; set; }
     public bool BatteryAwareInference { get; set; }
     public int BatteryThresholdPercent { get; set; } = 40;
+    /// <summary>Global text insertion path: <c>auto</c>, <c>unicode</c>, or <c>clipboard</c>.</summary>
+    [JsonConverter(typeof(InsertionStrategySettingJsonConverter))]
+    public string InsertionStrategy { get; set; } = "auto";
     public string LogVerbosity { get; set; } = "information";
     public long MaxLogBytes { get; set; } = 8 * 1024 * 1024;
     public int MaxLogFiles { get; set; } = 3;
@@ -107,6 +110,22 @@ public sealed class AppSettings
     /// most recent entries.
     /// </summary>
     public bool EnablePerformanceTracking { get; set; }
+}
+
+/// <summary>Keep malformed optional strategy values from resetting unrelated safety settings.</summary>
+public sealed class InsertionStrategySettingJsonConverter : JsonConverter<string>
+{
+    public override bool HandleNull => true;
+
+    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String) return reader.GetString() ?? "auto";
+        using var ignored = JsonDocument.ParseValue(ref reader);
+        return "auto";
+    }
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value);
 }
 
 /// <summary>

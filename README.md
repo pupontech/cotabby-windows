@@ -72,7 +72,7 @@ writing and mixed use.
 | UI                         | SwiftUI + AppKit               | WPF                                      |
 | Focus / caret detection    | Accessibility (AX) API         | UI Automation (UIA)                      |
 | Global keyboard hook       | `CGEventTap`                   | `SetWindowsHookEx` (WH_KEYBOARD_LL)      |
-| Text insertion             | `CGEvent` + AX                 | `SendInput` + UIA `TextPattern`          |
+| Text insertion             | `CGEvent` + AX                 | Unicode `SendInput` / clipboard paste; UIA validates target identity, not text writes |
 | Inference                  | llama.cpp (Swift bindings)     | [LLamaSharp](https://github.com/SciSharp/LLamaSharp) |
 | Apple Intelligence engine  | `FoundationModels`             | n/a — llama.cpp only                     |
 | Menu bar                   | NSStatusItem                   | `H.NotifyIcon` system tray               |
@@ -181,6 +181,7 @@ Open them from `Tray → Settings… → Advanced` (each has a one-click "Open" 
 | Per-app blocklist                  | ✅                        |
 | Per-app suggestion profiles (TabType Phase 2) | Implemented on `feat/tabtype-per-app-profiles`; Core/Win32 suites, real Windows Settings proof and independent review completed. Unmerged test build, not released or owner live-accepted. [Scope](docs/tabtype-per-app-profiles.md) |
 | Launch at login                    | ✅ (HKCU Run key)         |
+| Selectable insertion strategies (TabType Phase 2) | Implemented on `feat/tabtype-insertion-strategies`: Auto/Unicode/Clipboard, no UIA text-write claim. Unmerged test-build scope; exact proof is in the feature PR. [Scope and limits](docs/tabtype-insertion-strategies.md) |
 | Completion length presets (2–4 / 4–7 / 7–12 / 12–20 words) | ✅ |
 | GPU offload                        | ✅ Vulkan (vs Metal)      |
 | Apple Intelligence engine          | n/a (llama.cpp only)      |

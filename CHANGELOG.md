@@ -2,6 +2,13 @@
 
 ## Unreleased — TabType Phase 2
 
+- Selectable insertion strategies: global Auto, Unicode and
+  Clipboard choices with default transport behavior preserved. UIA text writes
+  are explicitly deferred because TextPattern has no setter and whole-value
+  replacement is not safe caret insertion. Malformed strategy JSON cannot reset
+  unrelated safety settings. Exact verification is recorded in the feature PR;
+  no release/live acceptance is implied. [Scope](docs/tabtype-insertion-strategies.md).
+
 - Per-app suggestion profiles: nullable behavior overrides with global safety
   gates retained, an Apps-pane editor, and stale-target retirement. Verification:
   Core/Win32 suites and Windows real-window settings/insertion/privacy

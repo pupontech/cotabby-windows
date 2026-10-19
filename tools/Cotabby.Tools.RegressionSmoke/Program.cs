@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -9,6 +10,7 @@ using Cotabby.App.UI;
 using Cotabby.Core.Focus;
 using Cotabby.Win32.Insertion;
 using Cotabby.Win32.Focus;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 internal static class Program
@@ -21,10 +23,16 @@ internal static class Program
         app.Startup += async (_, _) =>
         {
             AppHost? host = null;
+            string? originalInsertionStrategy = null;
+            bool insertionStrategyCaptured = false;
             try
             {
                 var overlay = new GhostOverlayWindow();
                 host = new AppHost(new DispatcherSynchronizationContext(app.Dispatcher), overlay);
+                originalInsertionStrategy = host.Settings.InsertionStrategy;
+                insertionStrategyCaptured = true;
+                host.Settings.InsertionStrategy = "uia";
+                host.PersistSettings();
                 var settings = new SettingsWindow(host);
                 settings.Show();
                 ((ListBox)settings.FindName("NavList")).SelectedIndex = 3;
@@ -46,6 +54,34 @@ internal static class Program
                 Console.WriteLine("SETTINGS_REAL_WINDOW_CHOICE_VISIBLE_SELECTED_PERSISTED=PASS");
                 ((ListBox)settings.FindName("NavList")).SelectedIndex = 5;
                 await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                var strategyCombo = (ComboBox)settings.FindName("InsertionStrategyCombo");
+                strategyCombo.BringIntoView();
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Require(strategyCombo.IsVisible && strategyCombo.ActualWidth > 0,
+                    "insertion strategy control is not visible in Advanced");
+                var interfaceInserter = host.Services.GetRequiredService<Cotabby.Core.Insertion.ITextInserter>();
+                var productionInserter = host.Services.GetRequiredService<SendInputTextInserter>();
+                Require(ReferenceEquals(interfaceInserter, productionInserter),
+                    "ITextInserter and concrete service did not resolve to the same instance");
+                var strategyExplanation = (TextBlock)settings.FindName("InsertionStrategyExplanation");
+                Require(strategyCombo.SelectedIndex == -1
+                    && strategyExplanation.Text.Contains("unsupported", StringComparison.OrdinalIgnoreCase)
+                    && host.SettingsStore.Load().InsertionStrategy == "uia"
+                    && productionInserter.InsertionStrategy == "uia",
+                    "manually stored UIA strategy was not visibly refused without a selectable UIA mode");
+                strategyCombo.SelectedItem = strategyCombo.Items.Cast<ComboBoxItem>()
+                    .Single(item => (string)item.Tag == "clipboard");
+                Require(host.Settings.InsertionStrategy == "clipboard"
+                    && host.SettingsStore.Load().InsertionStrategy == "clipboard"
+                    && productionInserter.InsertionStrategy == "clipboard",
+                    "Advanced insertion strategy did not update runtime and persisted settings");
+                strategyCombo.SelectedItem = strategyCombo.Items.Cast<ComboBoxItem>()
+                    .Single(item => (string)item.Tag == "auto");
+                Require(host.Settings.InsertionStrategy == "auto"
+                    && host.SettingsStore.Load().InsertionStrategy == "auto"
+                    && productionInserter.InsertionStrategy == "auto",
+                    "Advanced insertion strategy did not restore automatic mode");
+                Console.WriteLine("INSERTION_STRATEGY_ADVANCED_UI_PERSISTENCE_LIVE_SAME_INSTANCE=PASS");
                 var logCombo = (ComboBox)settings.FindName("LogVerbosityCombo");
                 Require(logCombo.IsVisible, "log verbosity control not visible");
                 logCombo.SelectedIndex = 2;
@@ -163,8 +199,16 @@ internal static class Program
                 using var tracker = new UiaFocusTracker(NullLogger<UiaFocusTracker>.Instance);
                 var target = await Task.Run(() => tracker.Refresh());
                 Require(target is { IsCredentialField: false, StableFieldIdentity: not null }, "fixture has no proven UIA identity");
-                var inserter = new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance);
-                // A stale target must not inject into the new foreground field.
+                var inserter = host.Services.GetRequiredService<SendInputTextInserter>();
+                var staleModes = new[]
+                {
+                    ("auto", "stale short"),
+                    ("unicode", new string('u', 80)),
+                    ("clipboard", "stale clipboard"),
+                    ("uia", "stale unsupported"),
+                };
+                Clipboard.SetText("stale-target clipboard sentinel");
+                uint staleSequence = GetClipboardSequenceNumber();
                 var otherBox = new TextBox { Text = "other " };
                 var otherWindow = new Window { Content = otherBox, Width = 400, Height = 200 };
                 otherWindow.Show();
@@ -173,15 +217,47 @@ internal static class Program
                 otherBox.CaretIndex = otherBox.Text.Length;
                 await Task.Delay(200);
                 Require(otherBox.IsKeyboardFocused, "second fixture did not receive focus");
-                bool staleInserted = await Task.Run(() => inserter.InsertAsync(target!, "must not land", CancellationToken.None));
-                await Task.Delay(180);
-                Require(!staleInserted && otherBox.Text == "other ", "stale target inserted into a different field");
-                Console.WriteLine("PRODUCTION_INSERTER_STALE_TARGET_REFUSED=PASS");
+                foreach (var (strategy, payload) in staleModes)
+                {
+                    inserter.InsertionStrategy = strategy;
+                    bool staleInserted = await Task.Run(() => inserter.InsertAsync(target!, payload, CancellationToken.None));
+                    await Task.Delay(40);
+                    Require(!staleInserted && otherBox.Text == "other ", $"stale target was not refused for {strategy}");
+                    Require(GetClipboardSequenceNumber() == staleSequence
+                        && Clipboard.GetText() == "stale-target clipboard sentinel",
+                        $"stale {strategy} attempt touched the clipboard");
+                }
+                Console.WriteLine("PRODUCTION_INSERTER_STALE_TARGET_REFUSED_AUTO_UNICODE_CLIPBOARD_UIA=PASS");
                 otherWindow.Close();
                 fixture.Activate();
                 box.Focus();
                 await Task.Delay(200);
                 string expected = box.Text;
+                string protectedText = box.Text;
+                Clipboard.SetText("protected-field clipboard sentinel");
+                uint protectedSequence = GetClipboardSequenceNumber();
+                var protectedModes = new[]
+                {
+                    ("auto", "protected short"),
+                    ("unicode", new string('p', 80)),
+                    ("clipboard", "protected clipboard"),
+                    ("uia", "protected unsupported"),
+                };
+                foreach (var (strategy, payload) in protectedModes)
+                {
+                    inserter.InsertionStrategy = strategy;
+                    var credentialTarget = target! with { IsCredentialField = true };
+                    var secureTarget = target! with { IsSecure = true };
+                    bool credentialInserted = await Task.Run(() => inserter.InsertAsync(credentialTarget, payload, CancellationToken.None));
+                    bool secureInserted = await Task.Run(() => inserter.InsertAsync(secureTarget, payload, CancellationToken.None));
+                    Require(!credentialInserted && !secureInserted && box.Text == protectedText,
+                        $"credential/secure target was not refused for {strategy}");
+                    Require(GetClipboardSequenceNumber() == protectedSequence
+                        && Clipboard.GetText() == "protected-field clipboard sentinel",
+                        $"protected {strategy} attempt touched the clipboard");
+                }
+                Console.WriteLine("PRODUCTION_INSERTER_CREDENTIAL_AND_SECURE_REFUSAL_ALL_MODES=PASS");
+                inserter.InsertionStrategy = "auto";
                 foreach (var chunk in new[] { "hello ", "world ", "bookkeeper ", "cool ", "... ", "this is a long clipboard-pasted completion with many words. " })
                 {
                     bool inserted = await Task.Run(() => inserter.InsertAsync(target!, chunk, CancellationToken.None));
@@ -191,6 +267,69 @@ internal static class Program
                     Require(box.Text == expected, $"production host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}");
                 }
                 Console.WriteLine("PRODUCTION_INSERTER_REAL_HOST_UNICODE_AND_CLIPBOARD_READBACK=PASS");
+
+                Clipboard.SetText("forced Unicode clipboard sentinel");
+                uint unicodeSequence = GetClipboardSequenceNumber();
+                string forcedUnicodeChunk = new string('u', 48) + "😀" + new string('v', 48);
+                Require(forcedUnicodeChunk.Length is >= 25 and <= 128, "forced Unicode fixture length is not bounded");
+                inserter.InsertionStrategy = "unicode";
+                Require(await Task.Run(() => inserter.InsertAsync(target!, forcedUnicodeChunk, CancellationToken.None)),
+                    "forced long Unicode insertion was refused");
+                expected += forcedUnicodeChunk;
+                await Task.Delay(180);
+                Require(box.Text == expected, $"forced long Unicode host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}");
+                Require(GetClipboardSequenceNumber() == unicodeSequence
+                    && Clipboard.GetText() == "forced Unicode clipboard sentinel",
+                    "forced Unicode insertion touched the clipboard");
+                Console.WriteLine("PRODUCTION_INSERTER_FORCED_LONG_UNICODE_EXACT_READBACK_CLIPBOARD_UNTOUCHED=PASS");
+
+                Clipboard.SetText("forced clipboard sentinel");
+                uint clipboardSequence = GetClipboardSequenceNumber();
+                inserter.InsertionStrategy = "clipboard";
+                const string forcedClipboardShortChunk = "x";
+                Require(await Task.Run(() => inserter.InsertAsync(target!, forcedClipboardShortChunk, CancellationToken.None)),
+                    "forced short clipboard insertion was refused");
+                expected += forcedClipboardShortChunk;
+                await Task.Delay(180);
+                Require(box.Text == expected, $"forced short clipboard host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}");
+                Require(GetClipboardSequenceNumber() != clipboardSequence
+                    && Clipboard.GetText() == "forced clipboard sentinel",
+                    "forced short clipboard insertion did not restore the sentinel after clipboard use");
+                Console.WriteLine("PRODUCTION_INSERTER_FORCED_SHORT_CLIPBOARD_EXACT_READBACK_SENTINEL_RESTORED=PASS");
+
+                Clipboard.SetText("queued strategy snapshot sentinel");
+                uint sequenceBeforeQueuedInsertion = GetClipboardSequenceNumber();
+                // Hold the actual serialization gate without a clipboard-writing
+                // predecessor: sampling after another paste finished could miss
+                // a wrongly queued clipboard write that already completed.
+                var gateField = typeof(SendInputTextInserter).GetField("_gate",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var insertionGate = gateField?.GetValue(inserter) as SemaphoreSlim
+                    ?? throw new InvalidOperationException("inserter serialization gate is unavailable for fixture");
+                await insertionGate.WaitAsync();
+                const string queuedUnicodeChunk = "queued short unicode";
+                Task<bool> queuedInsertion;
+                try
+                {
+                    inserter.InsertionStrategy = "unicode";
+                    queuedInsertion = inserter.InsertAsync(target!, queuedUnicodeChunk, CancellationToken.None);
+                    Require(!queuedInsertion.IsCompleted, "second insertion did not queue behind the held gate");
+                    inserter.InsertionStrategy = "clipboard";
+                }
+                finally
+                {
+                    insertionGate.Release();
+                }
+                Require(await queuedInsertion, "queued Unicode insertion was refused");
+                expected += queuedUnicodeChunk;
+                await Task.Delay(180);
+                Require(box.Text == expected, "queued insertion did not use the strategy captured before waiting");
+                Require(GetClipboardSequenceNumber() == sequenceBeforeQueuedInsertion
+                    && Clipboard.GetText() == "queued strategy snapshot sentinel",
+                    "queued Unicode insertion used the later clipboard strategy");
+                Console.WriteLine("PRODUCTION_INSERTER_STRATEGY_SNAPSHOT_BEFORE_GATE=PASS");
+                inserter.InsertionStrategy = "auto";
+
                 var originalClipboard = new DataObject();
                 originalClipboard.SetText("original clipboard text");
                 originalClipboard.SetData("Cotabby.Regression.Custom", "custom clipboard payload");
@@ -229,13 +368,32 @@ internal static class Program
             catch (Exception ex) { Console.Error.WriteLine(ex); }
             finally
             {
-                if (host is not null) await host.DisposeAsync();
+                if (host is not null)
+                {
+                    if (insertionStrategyCaptured)
+                    {
+                        try
+                        {
+                            host.Settings.InsertionStrategy = originalInsertionStrategy!;
+                            host.PersistSettings();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"Failed to restore insertion strategy setting ({ex.GetType().Name}).");
+                            result = 1;
+                        }
+                    }
+                    await host.DisposeAsync();
+                }
                 app.Shutdown(result);
             }
         };
         app.Run();
         return result;
     }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     private static void Require(bool condition, string message)
     {

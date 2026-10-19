@@ -38,29 +38,37 @@ public sealed class SendInputTextInserter : ITextInserter
 {
     private readonly ILogger<SendInputTextInserter> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private string? _insertionStrategy = "auto";
 
     public SendInputTextInserter(ILogger<SendInputTextInserter> logger) => _logger = logger;
 
     /// <summary>
-    /// Chunks at or below this length go through a single SendInput unicode
-    /// batch instead of the clipboard round-trip. Word-granularity accepts
-    /// are almost always under this, so per-word Tab presses stay fast and
-    /// never touch the user's clipboard. One SendInput call with the whole
-    /// array is atomic with respect to interleaving, which avoids the
-    /// dropped-character behavior the old one-call-per-char path exhibited.
+    /// Atomically updated global strategy. InsertAsync resolves it to a concrete
+    /// path before waiting on the insertion gate, so a queued call is unaffected
+    /// by later settings changes.
     /// </summary>
-    private const int MaxSendInputChars = 24;
+    public string? InsertionStrategy
+    {
+        get => Volatile.Read(ref _insertionStrategy);
+        set => Volatile.Write(ref _insertionStrategy, value);
+    }
 
     public async Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(text)) return true;
+
+        if (!InsertionStrategySelector.TrySelect(InsertionStrategy, text, out var insertionMethod))
+        {
+            _logger.LogWarning("Unsupported insertion strategy; insertion refused.");
+            return false;
+        }
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             ct.ThrowIfCancellationRequested();
 
-            if (text.Length <= MaxSendInputChars && !text.Contains('\n'))
+            if (insertionMethod == InsertionMethod.Unicode)
             {
                 _logger.LogInformation(
                     "Inserter (unicode) {Len} chars target.proc={Proc}",
