@@ -1164,6 +1164,23 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     AcceptanceGranularity == "phrase" ? SuggestionStatistic.AcceptedPhrase : SuggestionStatistic.AcceptedWord);
             }
         }
+        catch (IndeterminateTextInsertionException)
+        {
+            await PostAsync(() =>
+            {
+                // The host may already contain a prefix of this insertion. Retire
+                // only the offer that authorized it; a replacement request may
+                // have appeared while the native dispatch was in flight.
+                if (_session is { } current
+                    && current.RequestId == session.RequestId
+                    && string.Equals(current.StableFieldIdentity, session.StableFieldIdentity, StringComparison.Ordinal))
+                {
+                    CancelSession("indeterminate insertion", completePendingAcceptanceIntents: false);
+                }
+            }).ConfigureAwait(false);
+            _logger.LogWarning("Accept insertion outcome is indeterminate; current offer retired when still owned.");
+            return AcceptanceIntentStatus.InsertionFaulted;
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await PostAsync(_doubleTapAcceptanceState.Reset).ConfigureAwait(false);
@@ -1395,10 +1412,11 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         }).ConfigureAwait(false);
     }
 
-    private void CancelSession(string reason)
+    private void CancelSession(string reason, bool completePendingAcceptanceIntents = true)
     {
         _doubleTapAcceptanceState.Reset();
-        CompletePendingAcceptanceIntents(AcceptanceIntentStatus.IntentInvalidated);
+        if (completePendingAcceptanceIntents)
+            CompletePendingAcceptanceIntents(AcceptanceIntentStatus.IntentInvalidated);
         if (_session is null && !_generationInFlight) return;
         Statistics?.Record(reason is "accepted" or "consumed" ? SuggestionStatistic.Exhausted : SuggestionStatistic.Cancelled);
         _logger.LogInformation("Cancel session ({Reason}).", reason);

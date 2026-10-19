@@ -11,6 +11,9 @@
 - Explicit Unicode above eight UTF-16 code units uses isolated paced bursts after exact Windows host-text
   readback exposed character loss in one large event batch. Auto is unchanged;
   input isolation failure refuses without clipboard fallback.
+- Indeterminate Unicode dispatch retires only its owning suggestion offer,
+  preventing replay of a partially inserted prefix without cancelling a newer
+  request. Ordinary pre-dispatch refusal remains retryable.
 
 - Per-app suggestion profiles: nullable behavior overrides with global safety
   gates retained, an Apps-pane editor, and stale-target retirement. Verification:

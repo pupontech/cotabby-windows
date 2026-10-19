@@ -25,7 +25,9 @@ a setting change applies to the next call, not half of an already queued write.
   If input isolation is unavailable it refuses before writing. Focus is checked
   between bursts; cancellation after initial dispatch does not interrupt the text.
   A later focus/native failure can leave partial text: there is no retry, rollback
-  or clipboard fallback. Host applications may still interpret injected characters
+  or clipboard fallback. A known indeterminate dispatch retires its suggestion
+  offer so the same full chunk cannot be accepted again; a newer replacement
+  request is not cancelled by the old failure. Host applications may still interpret injected characters
   or line endings differently; use auto if this is unreliable in a real app.
 - `clipboard`: use the existing clipboard-preserving paste path even for short
   text. Clipboard contents temporarily change. Existing native-format capture,

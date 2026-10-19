@@ -8,6 +8,7 @@ using Cotabby.App.Hosting;
 using Cotabby.App.Overlay;
 using Cotabby.App.UI;
 using Cotabby.Core.Focus;
+using Cotabby.Core.Insertion;
 using Cotabby.Win32.Insertion;
 using Cotabby.Win32.Focus;
 using Microsoft.Extensions.DependencyInjection;
@@ -363,6 +364,44 @@ internal static class Program
                 Require(cancellation.IsCancellationRequested && box.Text == expected,
                     "cancellation case did not observe dispatched host text");
                 Console.WriteLine("PRODUCTION_INSERTER_POST_DISPATCH_CANCELLATION_ACCOUNTED=PASS");
+                var replacementBox = new TextBox { Text = "replacement " };
+                var replacementWindow = new Window { Content = replacementBox, Width = 400, Height = 200 };
+                replacementWindow.Show();
+                fixture.Activate();
+                box.Focus();
+                await Task.Delay(200);
+                Require(box.IsKeyboardFocused, "partial-dispatch fixture did not regain focus");
+                string beforePartial = box.Text;
+                const string partialChunk = "12345678 remainder must not reach the replacement field";
+                bool focusSwitched = false;
+                TextChangedEventHandler changeFocusAfterFirstBatch = (_, _) =>
+                {
+                    if (!focusSwitched && box.Text == beforePartial + partialChunk[..8])
+                    {
+                        focusSwitched = true;
+                        replacementWindow.Activate();
+                        replacementBox.Focus();
+                    }
+                };
+                box.TextChanged += changeFocusAfterFirstBatch;
+                try
+                {
+                    inserter.InsertionStrategy = "unicode";
+                    bool indeterminate = false;
+                    try { await inserter.InsertAsync(target!, partialChunk, CancellationToken.None); }
+                    catch (IndeterminateTextInsertionException) { indeterminate = true; }
+                    await Task.Delay(180);
+                    Require(indeterminate && focusSwitched && replacementBox.IsKeyboardFocused,
+                        "partial Unicode dispatch was not distinguished from pre-dispatch refusal");
+                    Require(box.Text == beforePartial + partialChunk[..8] && replacementBox.Text == "replacement ",
+                        "paced Unicode did not stop before writing to the replacement field");
+                    Console.WriteLine("PRODUCTION_INSERTER_PARTIAL_UNICODE_FOCUS_LOSS_TYPED=PASS");
+                }
+                finally
+                {
+                    box.TextChanged -= changeFocusAfterFirstBatch;
+                    replacementWindow.Close();
+                }
                 fixture.Close();
                 overlay.Close();
                 result = 0;

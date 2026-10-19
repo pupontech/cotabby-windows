@@ -247,19 +247,28 @@ public sealed class SendInputTextInserter : ITextInserter
             _logger.LogWarning("Paced Unicode insertion refused: input isolation unavailable.");
             return false;
         }
+        bool dispatched = false;
         try
         {
-            bool dispatched = false;
             foreach (string batch in UnicodeInputBatcher.Split(text))
             {
                 // After irreversible dispatch do not cancel mid-text or retry.
                 if (!dispatched) ct.ThrowIfCancellationRequested();
-                if (!TargetStillFocused(target)) return false;
-                if (!SendUnicodeString(batch)) return false;
+                if (!TargetStillFocused(target) || !SendUnicodeString(batch))
+                {
+                    if (dispatched) throw new IndeterminateTextInsertionException();
+                    return false;
+                }
                 dispatched = true;
                 Thread.Sleep(15); // Allow the destination to drain each small event burst.
             }
             return true;
+        }
+        catch (Exception) when (dispatched)
+        {
+            // Retire the caller's offer rather than presenting the whole chunk
+            // again after any prefix may already have reached the host.
+            throw new IndeterminateTextInsertionException();
         }
         finally { BlockInput(false); }
     }
@@ -272,7 +281,10 @@ public sealed class SendInputTextInserter : ITextInserter
             inputs[i * 2] = MakeUnicodeInput(text[i], keyUp: false);
             inputs[i * 2 + 1] = MakeUnicodeInput(text[i], keyUp: true);
         }
-        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
+        uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent != (uint)inputs.Length)
+            throw new IndeterminateTextInsertionException();
+        return sent == (uint)inputs.Length;
     }
 
     private static INPUT MakeUnicodeInput(char c, bool keyUp) => new()
