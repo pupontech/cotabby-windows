@@ -404,6 +404,47 @@ internal static class Program
                     box.TextChanged -= changeFocusAfterFirstBatch;
                     replacementWindow.Close();
                 }
+                // A foreground HWND guard alone cannot identify WPF sibling
+                // controls, so exercise the same transition inside one window.
+                fixture.Content = null;
+                var siblingBox = new TextBox { Text = "sibling " };
+                var panel = new StackPanel();
+                panel.Children.Add(box);
+                panel.Children.Add(siblingBox);
+                fixture.Content = panel;
+                fixture.Activate();
+                box.Focus();
+                box.CaretIndex = box.Text.Length;
+                siblingBox.CaretIndex = siblingBox.Text.Length;
+                await Task.Delay(200);
+                var sameWindowTarget = await Task.Run(() => tracker.Refresh());
+                Require(box.IsKeyboardFocused && sameWindowTarget is { IsCredentialField: false, StableFieldIdentity: not null },
+                    "same-window partial-dispatch fixture has no proven identity");
+                string beforeSibling = box.Text;
+                bool siblingFocused = false;
+                TextChangedEventHandler changeToSiblingAfterFirstBatch = (_, _) =>
+                {
+                    if (!siblingFocused && box.Text == beforeSibling + partialChunk[..8])
+                    {
+                        siblingFocused = true;
+                        siblingBox.Focus();
+                    }
+                };
+                box.TextChanged += changeToSiblingAfterFirstBatch;
+                try
+                {
+                    bool indeterminate = false;
+                    try { await inserter.InsertAsync(sameWindowTarget!, partialChunk, CancellationToken.None); }
+                    catch (IndeterminateTextInsertionException) { indeterminate = true; }
+                    await Task.Delay(180);
+                    Require(indeterminate && siblingFocused && siblingBox.IsKeyboardFocused,
+                        "same-window partial Unicode dispatch was not distinguished");
+                    Require(box.Text == beforeSibling + partialChunk[..8] && siblingBox.Text == "sibling ",
+                        $"same-window Unicode partial readback mismatch; original delta={box.Text.Length - beforeSibling.Length}; " +
+                        $"sibling delta={siblingBox.Text.Length - "sibling ".Length}");
+                    Console.WriteLine("PRODUCTION_INSERTER_PARTIAL_UNICODE_SIBLING_FOCUS_LOSS_TYPED=PASS");
+                }
+                finally { box.TextChanged -= changeToSiblingAfterFirstBatch; }
                 fixture.Close();
                 overlay.Close();
                 result = 0;
