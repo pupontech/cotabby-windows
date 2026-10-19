@@ -57,7 +57,8 @@ public sealed class SendInputTextInserter : ITextInserter
     {
         if (string.IsNullOrEmpty(text)) return true;
 
-        if (!InsertionStrategySelector.TrySelect(InsertionStrategy, text, out var insertionMethod))
+        string? strategySnapshot = InsertionStrategy;
+        if (!InsertionStrategySelector.TrySelect(strategySnapshot, text, out var insertionMethod))
         {
             _logger.LogWarning("Unsupported insertion strategy; insertion refused.");
             return false;
@@ -77,7 +78,11 @@ public sealed class SendInputTextInserter : ITextInserter
                 {
                     ct.ThrowIfCancellationRequested();
                     if (!TargetStillFocused(target)) return false;
-                    return SendUnicodeString(text);
+                    // Only explicit long Unicode opts into pacing; Auto keeps
+                    // its original one-batch short-text behavior exactly.
+                    return text.Length > 24 && string.Equals(strategySnapshot, "unicode", StringComparison.OrdinalIgnoreCase)
+                        ? SendPacedUnicodeString(target, text, ct)
+                        : SendUnicodeString(text);
                 }, ct).ConfigureAwait(false);
             }
 
@@ -233,6 +238,32 @@ public sealed class SendInputTextInserter : ITextInserter
     /// KEYEVENTF_UNICODE down/up pairs. UTF-16 code units go through as-is,
     /// so surrogate pairs (emoji) arrive intact.
     /// </summary>
+    private bool SendPacedUnicodeString(FocusedField target, string text, CancellationToken ct)
+    {
+        // Keep the native thread fixed from BlockInput(true) through cleanup.
+        // Without input blocking, separate bursts could interleave physical keys.
+        if (!BlockInput(true))
+        {
+            _logger.LogWarning("Paced Unicode insertion refused: input isolation unavailable.");
+            return false;
+        }
+        try
+        {
+            bool dispatched = false;
+            foreach (string batch in UnicodeInputBatcher.Split(text))
+            {
+                // After irreversible dispatch do not cancel mid-text or retry.
+                if (!dispatched) ct.ThrowIfCancellationRequested();
+                if (!TargetStillFocused(target)) return false;
+                if (!SendUnicodeString(batch)) return false;
+                dispatched = true;
+                Thread.Sleep(15); // Allow the destination to drain each small event burst.
+            }
+            return true;
+        }
+        finally { BlockInput(false); }
+    }
+
     private static bool SendUnicodeString(string text)
     {
         var inputs = new INPUT[text.Length * 2];
