@@ -2,6 +2,18 @@
 
 ## Unreleased — TabType Phase 2
 
+- Selectable Auto/Clipboard insertion strategies with exact legacy Auto behavior
+  preserved. Forced Unicode is deferred after real Windows wrong-field proof;
+  UIA text writes are deferred because TextPattern has no setter and whole-value
+  replacement is not safe caret insertion. Explicit saved `unicode`/`uia` requests
+  refuse before native/clipboard writes, never silently fall back. Malformed
+  strategy JSON preserves unrelated safety settings. Exact verification is in
+  the feature PR; no release/live acceptance is implied.
+  [Scope and limits](docs/tabtype-insertion-strategies.md).
+- Indeterminate Unicode dispatch retires only its owning suggestion offer,
+  preventing replay of a partially inserted prefix without cancelling a newer
+  request. Ordinary pre-dispatch refusal remains retryable.
+
 - Per-app suggestion profiles: nullable behavior overrides with global safety
   gates retained, an Apps-pane editor, and stale-target retirement. Verification:
   Core/Win32 suites and Windows real-window settings/insertion/privacy

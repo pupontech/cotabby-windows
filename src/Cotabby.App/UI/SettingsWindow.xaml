@@ -807,6 +807,19 @@
                                     HorizontalAlignment="Left" Click="OnRefreshBatteryStatus" />
                         </StackPanel>
                     </Border>
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Text insertion" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="Insertion strategy" />
+                            <ComboBox x:Name="InsertionStrategyCombo" Style="{StaticResource Combo}"
+                                      Margin="0,8,0,8" SelectionChanged="OnInsertionStrategyChanged">
+                                <ComboBoxItem Content="Automatic (recommended)" Tag="auto" />
+                                <ComboBoxItem Content="Clipboard paste" Tag="clipboard" />
+                            </ComboBox>
+                            <TextBlock x:Name="InsertionStrategyExplanation" Style="{StaticResource Caption}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Diagnostics" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>

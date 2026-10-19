@@ -1068,6 +1068,37 @@ public partial class SettingsWindow : Window
         {
             "debug" => 1, "warning" => 2, "error" => 3, _ => 0,
         };
+
+        string? savedStrategy = _host.Settings.InsertionStrategy?.ToLowerInvariant();
+        if (savedStrategy is "unicode" or "uia")
+        {
+            InsertionStrategyCombo.SelectedIndex = -1;
+            InsertionStrategyExplanation.Text = $"The saved '{savedStrategy}' strategy is unsupported and deferred. Non-empty insertions are refused without clipboard fallback. Choose Auto or Clipboard to resume.";
+        }
+        else
+        {
+            string strategy = savedStrategy == "clipboard" ? "clipboard" : "auto";
+            InsertionStrategyCombo.SelectedItem = InsertionStrategyCombo.Items
+                .Cast<ComboBoxItem>()
+                .Single(item => string.Equals(item.Tag as string, strategy, StringComparison.Ordinal));
+            InsertionStrategyExplanation.Text = InsertionStrategyExplanationFor(strategy);
+        }
+    }
+
+    private static string InsertionStrategyExplanationFor(string strategy) => strategy switch
+    {
+        "clipboard" => "Temporarily puts text on the clipboard to paste, then restores saved formats only while Cotabby still owns it. Clipboard managers may observe the temporary text.",
+        _ => "Auto preserves the existing heuristic: up to 24 UTF-16 code units with no LF use one Unicode SendInput batch; all other text uses clipboard paste. Short Unicode batches may still be dropped by some hosts. A carriage return alone does not change the rule.",
+    };
+
+    private void OnInsertionStrategyChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded || InsertionStrategyCombo.SelectedItem is not ComboBoxItem item
+            || item.Tag is not string strategy) return;
+        if (string.Equals(_host.Settings.InsertionStrategy, strategy, StringComparison.Ordinal)) return;
+        _host.Settings.InsertionStrategy = strategy;
+        InsertionStrategyExplanation.Text = InsertionStrategyExplanationFor(strategy);
+        _host.PersistSettings();
     }
 
     private void OnBatterySettingsChanged(object sender, RoutedEventArgs e)

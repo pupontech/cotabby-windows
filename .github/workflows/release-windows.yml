@@ -126,6 +126,7 @@ jobs:
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           Copy-Item docs/tabtype-phase1.md (Join-Path $root TABTYPE-PHASE1-NOTES.md)
           Copy-Item docs/tabtype-per-app-profiles.md (Join-Path $root APP-PROFILES-NOTES.md)
+          Copy-Item docs/tabtype-insertion-strategies.md (Join-Path $root INSERTION-STRATEGIES-NOTES.md)
           @(
             'Cotabby Windows release build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'

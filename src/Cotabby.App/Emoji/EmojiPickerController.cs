@@ -45,6 +45,9 @@ public sealed class EmojiPickerController : IDisposable
 
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Live admission gate for committing the selected glyph. Unwired controllers fail closed.</summary>
+    public Func<string, bool>? CommitAdmission { get; set; }
+
     public EmojiPickerController(
         IKeyboardHook hook,
         IFocusTracker focus,
@@ -94,8 +97,14 @@ public sealed class EmojiPickerController : IDisposable
             case EmojiTriggerStateMachine.Outcome.Commit:
                 if (_matches.Count > 0)
                 {
-                    args.Suppress = true;
                     var entry = _matches[_selected];
+                    if (!IsCommitAdmitted(entry))
+                    {
+                        ClearPopup();
+                        return;
+                    }
+
+                    args.Suppress = true;
                     _ = CommitAsync(entry);
                 }
                 ClearPopup();
@@ -131,6 +140,8 @@ public sealed class EmojiPickerController : IDisposable
     {
         try
         {
+            if (!IsCommitAdmitted(entry)) return;
+
             var field = _focus.Refresh() ?? _triggerField;
             if (field is null || field.IsCredentialField) return;
 
@@ -156,6 +167,9 @@ public sealed class EmojiPickerController : IDisposable
             _logger.LogWarning(ex, "Emoji commit failed.");
         }
     }
+
+    private bool IsCommitAdmitted(EmojiEntry entry) =>
+        CommitAdmission?.Invoke(entry.Glyph) == true;
 
     private static async Task EatCharsAsync(int count, CancellationToken ct)
     {

@@ -81,6 +81,94 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     }
 
     [Fact]
+    public void IndeterminateTextInsertionExceptionHasAContentFreePublicContract()
+    {
+        var exception = new IndeterminateTextInsertionException();
+
+        Assert.True(exception.GetType().IsPublic);
+        Assert.True(exception.GetType().IsSealed);
+        Assert.Equal(typeof(Exception), exception.GetType().BaseType);
+        Assert.Equal("Text insertion may have been partially dispatched.", exception.Message);
+        Assert.Equal(exception.Message, new IndeterminateTextInsertionException().Message);
+    }
+
+    [Fact]
+    public async Task IndeterminatePartialInsertionRetiresSessionAndDoesNotReplayQueuedAccepts()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var stats = new SuggestionStatisticsStore { Enabled = true };
+        rig.Coordinator.Statistics = stats;
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(1);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Single().Status);
+        Assert.Equal(" again tomorrow today", rig.Overlay.Text);
+        Assert.Equal(1, stats.Snapshot()[SuggestionStatistic.AcceptedWord]);
+
+        var indeterminate = rig.Inserter.DelayNext();
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        await indeterminate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(" again tomorrow today", Assert.Single(rig.Inserter.Attempts.Skip(1)));
+
+        // Queue a third captured Tab behind the in-flight full-tail accept.
+        rig.Clock.Now += 0.1;
+        Assert.True(rig.Hook.Emit(Tab()));
+        indeterminate.FailIndeterminateAfterPartialMutation(6);
+        await indeterminate.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(3);
+
+        Assert.Equal(new[]
+        {
+            AcceptanceIntentStatus.StateCommitted,
+            AcceptanceIntentStatus.InsertionFaulted,
+            AcceptanceIntentStatus.BlockedByEarlierFailure,
+        }, rig.Outcomes.Select(outcome => outcome.Status));
+        Assert.Equal("Hello world again", rig.Focus.HostText);
+        Assert.False(rig.Overlay.IsVisible);
+        Assert.Equal(1, stats.Snapshot()[SuggestionStatistic.AcceptedWord]);
+        Assert.Equal(0, stats.Snapshot()[SuggestionStatistic.AcceptedWhole]);
+
+        // The same still-visible tail must no longer be capturable after the
+        // indeterminate partial write; accepting it again would duplicate " again".
+        Assert.False(rig.Hook.Emit(Tab()));
+        Assert.Equal(new[] { "world", " again tomorrow today" }, rig.Inserter.Attempts);
+        Assert.Equal("Hello world again", rig.Focus.HostText);
+    }
+
+    [Fact]
+    public async Task IndeterminateFailureForOldRequestDoesNotCancelReplacementSession()
+    {
+        await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
+        var indeterminate = rig.Inserter.DelayNext();
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await indeterminate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var replacementField = rig.Focus.Current! with { StableFieldIdentity = "replacement-field" };
+        rig.Focus.SetField(replacementField);
+        rig.Ui.DrainAll();
+        Assert.False(rig.Overlay.IsVisible);
+
+        Assert.False(rig.Hook.Emit(Character('x')));
+        await rig.WaitForOverlayAsync();
+        Assert.Equal("world again tomorrow today", rig.Overlay.Text);
+
+        indeterminate.FailIndeterminateAfterPartialMutation(2);
+        await indeterminate.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await rig.WaitForOutcomesAsync(1);
+
+        Assert.Equal(AcceptanceIntentStatus.InsertionFaulted, rig.Outcomes.Single().Status);
+        Assert.True(rig.Overlay.IsVisible);
+        Assert.Equal("world again tomorrow today", rig.Overlay.Text);
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        await rig.WaitForOutcomesAsync(2);
+        Assert.Equal(AcceptanceIntentStatus.StateCommitted, rig.Outcomes.Last().Status);
+        Assert.Equal(new[] { "world", "world" }, rig.Inserter.Attempts);
+    }
+
+    [Fact]
     public async Task PromotedTailUsesKnownInsertedTextWhenUiaSnapshotIsStale()
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true);
@@ -613,7 +701,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             return rig;
         }
 
-        private async Task WaitForOverlayAsync()
+        public async Task WaitForOverlayAsync()
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (!Overlay.IsVisible)
@@ -873,11 +961,16 @@ public sealed class SuggestionCoordinatorDoubleTapTests
                     }
                 }
 
-                if (inserted)
+                string appliedText = plan is { IsIndeterminateAfterPartialMutation: true }
+                    ? text[..Math.Min(plan.PartialMutationLength, text.Length)]
+                    : text;
+                if (inserted && appliedText.Length > 0)
                 {
-                    lock (_gate) _inserted.Add(text);
-                    _focus.ApplyInsertion(text);
+                    lock (_gate) _inserted.Add(appliedText);
+                    _focus.ApplyInsertion(appliedText);
                 }
+                if (plan is { IsIndeterminateAfterPartialMutation: true })
+                    throw new IndeterminateTextInsertionException();
                 return inserted;
             }
             finally
@@ -900,7 +993,15 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsIndeterminateAfterPartialMutation { get; private set; }
+        public int PartialMutationLength { get; private set; }
         public void Release(bool inserted) => Result.TrySetResult(inserted);
         public void Throw(Exception exception) => Result.TrySetException(exception);
+        public void FailIndeterminateAfterPartialMutation(int charCount)
+        {
+            PartialMutationLength = Math.Max(0, charCount);
+            IsIndeterminateAfterPartialMutation = true;
+            Result.TrySetResult(true);
+        }
     }
 }

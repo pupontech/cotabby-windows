@@ -55,6 +55,12 @@ public sealed class AppHost : IAsyncDisposable
 
     public void RegisterEmojiPicker(Cotabby.App.Emoji.EmojiPickerController picker)
     {
+        var inserter = Services.GetRequiredService<SendInputTextInserter>();
+        picker.CommitAdmission = glyph =>
+            Settings.Enabled
+            && Settings.EmojiPickerEnabled
+            && picker.Enabled
+            && InsertionStrategySelector.TrySelect(inserter.InsertionStrategy, glyph, out _);
         EmojiPicker = picker;
     }
 
@@ -92,7 +98,8 @@ public sealed class AppHost : IAsyncDisposable
 
         sc.AddSingleton<IFocusTracker, UiaFocusTracker>();
         sc.AddSingleton<IKeyboardHook, KeyboardHook>();
-        sc.AddSingleton<ITextInserter, SendInputTextInserter>();
+        sc.AddSingleton<SendInputTextInserter>();
+        sc.AddSingleton<ITextInserter>(provider => provider.GetRequiredService<SendInputTextInserter>());
 
         sc.AddSingleton<LlamaRuntimeManager>();
         sc.AddSingleton<ModelDownloader>();
@@ -139,6 +146,7 @@ public sealed class AppHost : IAsyncDisposable
     /// </summary>
     public void ApplyRuntimeSettings()
     {
+        Services.GetRequiredService<SendInputTextInserter>().InsertionStrategy = Settings.InsertionStrategy;
         if (EmojiPicker is not null) EmojiPicker.Enabled = false;
         // Quiesce admission while settings are replaced. The global enabled bit
         // is restored only by ConfigureProfileSettings, after the latest
