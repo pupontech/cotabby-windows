@@ -9,6 +9,17 @@ namespace Cotabby.App.Settings;
 /// </summary>
 public sealed class AppProfile
 {
+    public static string? GetProcessNameValidationError(string? name, string selfProcessName)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "Enter the app's executable name, for example notepad.";
+        if (string.Equals(name, selfProcessName, StringComparison.OrdinalIgnoreCase))
+            return "Cotabby cannot target itself.";
+        return Cotabby.Core.Settings.AppProfileResolver.IsValidProfile(
+            new Cotabby.Core.Settings.AppProfileOverride { ProcessName = name })
+            ? null : "Use an executable base name, without a path or wildcard.";
+    }
+
     public string? ProcessName { get; set; }
     public bool? Enabled { get; set; }
     public string? AcceptanceMode { get; set; }

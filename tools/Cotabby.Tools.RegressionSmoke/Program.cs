@@ -115,6 +115,11 @@ internal static class Program
                 Click("ProfileSaveButton");
                 Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0
                     && host.Settings.AppProfiles!.Count(p => p is not null) == 1, "duplicate key was accepted");
+                processBox.Text = "";
+                Click("ProfileSaveButton");
+                Require(Control<TextBlock>("ProfileValidationText").Text == "Enter the app's executable name, for example notepad."
+                    && host.SettingsStore.Load().AppProfiles!.Count(p => p is not null) == 1,
+                    "blank process name did not receive actionable guidance or changed persisted profiles");
                 processBox.Text = "C:\\bad\\process";
                 Click("ProfileSaveButton");
                 Require(Control<TextBlock>("ProfileValidationText").Text.Length > 0, "path key was accepted");

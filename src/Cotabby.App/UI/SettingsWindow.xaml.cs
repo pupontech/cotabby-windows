@@ -931,6 +931,8 @@ public partial class SettingsWindow : Window
         }
         try
         {
+            if (AppProfile.GetProcessNameValidationError(name, Process.GetCurrentProcess().ProcessName) is { } nameError)
+                throw new ArgumentException(nameError);
             var profile = new AppProfile
             {
                 ProcessName = name,
@@ -943,15 +945,14 @@ public partial class SettingsWindow : Window
                 MaxTokensSingleLine = Number(ProfileSingleTokensBox, 4, 96),
                 MaxTokensMultiLine = Number(ProfileMultiTokensBox, 4, 128),
             };
-            if (string.Equals(name, Process.GetCurrentProcess().ProcessName, StringComparison.OrdinalIgnoreCase)
-                || !Cotabby.Core.Settings.AppProfileResolver.IsValidProfile(new Cotabby.Core.Settings.AppProfileOverride
+            if (!Cotabby.Core.Settings.AppProfileResolver.IsValidProfile(new Cotabby.Core.Settings.AppProfileOverride
                 {
                     ProcessName = name, Enabled = profile.Enabled, AcceptanceMode = profile.AcceptanceMode,
                     CompletionLengthPreset = profile.CompletionLengthPreset, DisplayMode = profile.DisplayMode,
                     AllowMultiLine = profile.AllowMultiLine, DebounceMs = profile.DebounceMs,
                     MaxTokensSingleLine = profile.MaxTokensSingleLine, MaxTokensMultiLine = profile.MaxTokensMultiLine,
                 }))
-                throw new ArgumentException("Use an executable base name, without a path or wildcard. Cotabby cannot target itself.");
+                throw new ArgumentException("Choose valid profile options; use Inherit to keep the global setting.");
             var profiles = _host.Settings.AppProfiles ??= new();
             if (profiles.Any(p => p is not null && !ReferenceEquals(p, _editingAppProfile)
                     && string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)))
