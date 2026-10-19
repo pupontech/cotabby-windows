@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — TabType Phase 2
+
+- Per-app suggestion profiles: nullable behavior overrides with global safety
+  gates retained, an Apps-pane editor, and stale-target retirement. Verification:
+  Core/Win32 suites and Windows real-window settings/insertion/privacy
+  proofs passed. Independent review completed; the missing-caption resource
+  and malformed-profile whole-settings reset were fixed with regressions.
+  Not published or owner live-accepted.
+  See [contract and verification gates](docs/tabtype-per-app-profiles.md).
+
 ## 0.6.0 — 2026-10-17
 
 TabType Phase 1 (from this fork's own `openspec/audit/` plan), ported onto the

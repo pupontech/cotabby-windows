@@ -644,17 +644,22 @@ public sealed class SuggestionCoordinatorDoubleTapTests
 
     internal sealed class TestSuggestionEngine : ISuggestionEngine
     {
+        private int _generationCount;
         public SuggestionRequest? LastRequest { get; private set; }
+        public int GenerationCount => Volatile.Read(ref _generationCount);
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsReady => true;
 
         public async IAsyncEnumerable<SuggestionChunk> GenerateAsync(
             SuggestionRequest request,
             [EnumeratorCancellation] CancellationToken ct)
         {
+            Interlocked.Increment(ref _generationCount);
             LastRequest = request;
             Started.TrySetResult();
+            using var registration = ct.Register(() => CancellationObserved.TrySetResult());
             await Release.Task.WaitAsync(ct).ConfigureAwait(false);
             yield return new SuggestionChunk("world again tomorrow today", IsFinal: true);
         }
@@ -771,7 +776,12 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public string HostText { get; private set; } = "Hello ";
 
         public FocusedField? Current => _field;
-        public event EventHandler<FocusedField?>? FocusChanged { add { } remove { } }
+        public event EventHandler<FocusedField?>? FocusChanged;
+        public void SetField(FocusedField field)
+        {
+            _field = field;
+            FocusChanged?.Invoke(this, field);
+        }
         public FocusedField? Refresh() => _field is null
             ? null
             : _field with { Text = KeepSnapshotStale ? "Hello " : HostText };
@@ -786,10 +796,11 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         public void ApplyInsertion(string text) => HostText += text;
     }
 
-    internal sealed class TestOverlay : IOverlayPresenter
+    internal sealed class TestOverlay : IOverlayPresenter, IOverlayDisplayMode
     {
         public string? Text { get; private set; }
         public bool IsVisible => Text is not null;
+        public string DisplayMode { get; private set; } = "auto";
         /// <summary>When set, the next Update() call (used by the commit post to
         /// reflect the remaining tail) throws, to drive a fault through the
         /// acceptance queue processor.</summary>
@@ -805,6 +816,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
             Text = text;
         }
         public void Hide() => Text = null;
+        public void SetDisplayMode(string displayMode) => DisplayMode = displayMode;
     }
 
     internal sealed class TestTextInserter : ITextInserter

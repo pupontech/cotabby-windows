@@ -4,6 +4,7 @@ using Cotabby.Core.Focus;
 using Cotabby.Core.Input;
 using Cotabby.Core.Insertion;
 using Cotabby.Core.Overlay;
+using Cotabby.Core.Settings;
 using Microsoft.Extensions.Logging;
 
 namespace Cotabby.Core.Suggestions;
@@ -37,11 +38,18 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     private SuggestionSession? _session;
     private int _sessionPid;
     private bool _enabled = true;
+    private EffectiveSuggestionSettings? _configuredGlobalSettings;
+    private IReadOnlyList<AppProfileOverride?>? _appProfiles;
+    private string? _selfProcessName;
+    private EffectiveSuggestionSettings? _activeSuggestionSettings;
+    private ISet<string>? _blockedApps;
     private volatile bool _disposed;
     /// <summary>True while a generation is past its debounce and the engine is producing tokens.</summary>
     private bool _generationInFlight;
     /// <summary>Process id of the host that owned focus when the in-flight request fired.</summary>
     private int _inFlightPid;
+    private string? _inFlightStableFieldIdentity;
+    private string? _inFlightProcessName;
     private string? _inFlightRequestId;
     private sealed record PresentationSnapshot(
         string RequestId,
@@ -154,7 +162,21 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// host is in this set we suppress suggestions for it. Settable from the
     /// settings UI; null/empty disables the check.
     /// </summary>
-    public ISet<string>? BlockedApps { get; set; }
+    public ISet<string>? BlockedApps
+    {
+        get => _blockedApps;
+        set
+        {
+            var snapshot = value is null
+                ? null
+                : new HashSet<string>(value, StringComparer.OrdinalIgnoreCase);
+            Post(() =>
+            {
+                _blockedApps = snapshot;
+                CancelSession("blocklist changed");
+            });
+        }
+    }
 
     /// <summary>
     /// When set (App wires the Windows energy-saver reader behind the
@@ -167,6 +189,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     public bool BatteryAwareInference { get; set; }
     public int BatteryThresholdPercent { get; set; } = 40;
     public TimeSpan? RequestDebounce { get; set; }
+    public string DisplayMode { get; private set; } = "auto";
     private Cotabby.Core.Support.InferencePosture _batteryPosture;
     private readonly object _batteryGate = new();
     /// <summary>Current posture. Hysteresis state is shared by the hook thread and
@@ -199,6 +222,45 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
     /// macOS port's "Allow multi-line suggestions" toggle.
     /// </summary>
     public bool AllowMultiLineSuggestions { get; set; } = true;
+
+    /// <summary>Install mapped global/profile settings and resolve against current focus.</summary>
+    public void ConfigureProfileSettings(
+        EffectiveSuggestionSettings global,
+        IReadOnlyList<AppProfileOverride?>? profiles,
+        string? selfProcessName)
+    {
+        var profileSnapshot = profiles?.ToArray();
+        Post(() =>
+        {
+            _configuredGlobalSettings = global;
+            _appProfiles = profileSnapshot;
+            _selfProcessName = selfProcessName;
+            Enabled = global.Enabled;
+            ApplyProfileFor(_focus.Current?.ProcessName);
+        });
+    }
+
+    private void ApplyProfileFor(string? processName)
+    {
+        if (_configuredGlobalSettings is not { } global) return;
+        var resolved = AppProfileResolver.Resolve(global, _appProfiles, processName, _selfProcessName);
+        bool changed = _activeSuggestionSettings is null
+            ? _session is not null || _generationInFlight
+            : _activeSuggestionSettings != resolved;
+        _activeSuggestionSettings = resolved;
+        AcceptanceGranularity = resolved.AcceptanceMode;
+        CompletionLengthPreset = resolved.CompletionLengthPreset;
+        DisplayMode = resolved.DisplayMode;
+        AllowMultiLineSuggestions = resolved.AllowMultiLine;
+        RequestDebounce = TimeSpan.FromMilliseconds(Math.Clamp(resolved.DebounceMs, 20, 300));
+        MaxTokensSingleLine = resolved.MaxTokensSingleLine;
+        MaxTokensMultiLine = resolved.MaxTokensMultiLine;
+        if (_overlay is IOverlayDisplayMode displayMode)
+            displayMode.SetDisplayMode(resolved.DisplayMode);
+        if (changed) CancelSession("profile settings changed");
+    }
+
+    private string CompletionLengthPreset { get; set; } = "long";
 
     /// <summary>
     /// Optional accept-whole-suggestion key character (case-insensitive).
@@ -272,6 +334,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _inFlightRequestId = null;
         _generationInFlight = false;
         _inFlightPid = 0;
+        _inFlightStableFieldIdentity = null;
+        _inFlightProcessName = null;
         _doubleTapAcceptanceState.Reset();
         PublishSessionSnapshot(null);
         void ClearDisposedPresentation()
@@ -296,6 +360,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             // Even a focus transition within one process ends the user's
             // physical double-tap sequence.
             _doubleTapAcceptanceState.Reset();
+            ApplyProfileFor(field?.ProcessName);
 
             int newPid = field?.ProcessId ?? 0;
 
@@ -313,14 +378,17 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             // the OLD window's prefix and eventually pops a stale overlay over
             // the new window. The work's Post handler also re-checks before
             // touching state, but cancelling immediately frees CPU sooner.
-            if (_generationInFlight && _inFlightPid != 0 && newPid != _inFlightPid)
+            if (_generationInFlight
+                && (field is null
+                    || newPid != _inFlightPid
+                    || field.IsSecure
+                    || field.IsCredentialField
+                    || !FieldIdentityProvesOwnership(field.StableFieldIdentity, _inFlightStableFieldIdentity)
+                    || !string.Equals(field.ProcessName, _inFlightProcessName, StringComparison.OrdinalIgnoreCase)))
             {
-                _logger.LogInformation("Focus moved (oldPid={Old}, newPid={New}); cancelling in-flight work.",
+                _logger.LogInformation("Focus target changed (oldPid={Old}, newPid={New}); cancelling in-flight work.",
                     _inFlightPid, newPid);
-                _work.Cancel();
-                _generationInFlight = false;
-                _inFlightPid = 0;
-                _inFlightRequestId = null;
+                CancelSession("focus changed to different field");
             }
         });
     }
@@ -472,6 +540,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             Statistics?.Record(SuggestionStatistic.SuppressedCredential);
             return;
         }
+        ApplyProfileFor(field.ProcessName);
+        if (!_enabled || _activeSuggestionSettings is { Enabled: false }) return;
         if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
         {
             Statistics?.Record(SuggestionStatistic.SuppressedBattery);
@@ -509,6 +579,22 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             Statistics?.Record(SuggestionStatistic.SuppressedCredential);
             _logger.LogDebug("TriggerGeneration skipped: sign-in/verification field ({Host}).",
                 fieldAtTrigger.ProcessName);
+            return;
+        }
+
+        ApplyProfileFor(fieldAtTrigger.ProcessName);
+        if (!_enabled
+            || _activeSuggestionSettings is { Enabled: false }
+            || fieldAtTrigger.IsSecure
+            || fieldAtTrigger.ProcessId == Environment.ProcessId
+            || BlockedApps?.Contains(fieldAtTrigger.ProcessName) == true)
+        {
+            return;
+        }
+
+        if (LowPowerModePause is { } pause && pause.IsLowPowerModeEnabled)
+        {
+            Statistics?.Record(SuggestionStatistic.SuppressedBattery);
             return;
         }
 
@@ -557,6 +643,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
 
         _generationInFlight = true;
         _inFlightPid = pid;
+        _inFlightStableFieldIdentity = field.StableFieldIdentity;
+        _inFlightProcessName = field.ProcessName;
         _inFlightRequestId = reqId;
         _ = _work.Submit(async ct =>
         {
@@ -667,16 +755,28 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         // Revalidate the target before presenting the old field's
                         // completion, not only later when the user accepts it.
                         var live = _focus.Refresh();
-                        if (live is { } focused
-                            && (focused.IsCredentialField || focused.ProcessId != field.ProcessId
-                                || !FieldIdentityProvesOwnership(focused.StableFieldIdentity, field.StableFieldIdentity)))
+                        if (live is not { } focused)
+                        {
+                            CancelSession("focus unavailable before presentation");
+                            return;
+                        }
+                        ApplyProfileFor(focused.ProcessName);
+                        if (_inFlightRequestId != reqId
+                            || !_enabled
+                            || _activeSuggestionSettings is { Enabled: false }
+                            || focused.IsSecure
+                            || focused.IsCredentialField
+                            || focused.ProcessId == Environment.ProcessId
+                            || BlockedApps?.Contains(focused.ProcessName) == true
+                            || focused.ProcessId != field.ProcessId
+                            || !string.Equals(focused.ProcessName, field.ProcessName, StringComparison.OrdinalIgnoreCase)
+                            || !FieldIdentityProvesOwnership(focused.StableFieldIdentity, field.StableFieldIdentity))
                         {
                             CancelSession("focus changed before presentation");
                             return;
                         }
-                        var liveAnchor = (live is not null && !live.CaretRect.IsEmpty)
-                            ? live.CaretRect : anchor;
-                        int livePid = live?.ProcessId ?? field.ProcessId;
+                        var liveAnchor = !focused.CaretRect.IsEmpty ? focused.CaretRect : anchor;
+                        int livePid = focused.ProcessId;
 
                         _session = new SuggestionSession
                         {
@@ -755,6 +855,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                     if (_inFlightRequestId != reqId) return;
                     _generationInFlight = false;
                     _inFlightPid = 0;
+                    _inFlightStableFieldIdentity = null;
+                    _inFlightProcessName = null;
                     _inFlightRequestId = null;
                 });
             }
@@ -947,8 +1049,25 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         if (_disposed) return AcceptanceIntentStatus.CoordinatorDisposed;
-        var session = _session;
         var presentation = intent.Presentation;
+        var field = _focus.Refresh();
+        ApplyProfileFor(field?.ProcessName);
+        if (field is null
+            || !_enabled
+            || _activeSuggestionSettings is { Enabled: false }
+            || field.IsSecure
+            || field.IsCredentialField
+            || field.ProcessId == Environment.ProcessId
+            || BlockedApps?.Contains(field.ProcessName) == true
+            || LowPowerModePause is { IsLowPowerModeEnabled: true }
+            || BatteryPosture == Cotabby.Core.Support.InferencePosture.Deferred)
+        {
+            _doubleTapAcceptanceState.Reset();
+            CancelSession("runtime policy changed before accept");
+            return AcceptanceIntentStatus.IntentInvalidated;
+        }
+
+        var session = _session;
         if (session is null
             || session.RequestId != presentation.RequestId
             || !string.Equals(session.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
@@ -959,9 +1078,7 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
             return AcceptanceIntentStatus.IntentInvalidated;
         }
 
-        var field = _focus.Refresh();
-        if (field is null
-            || field.IsCredentialField
+        if (field.IsCredentialField
             || field.ProcessId != presentation.ProcessId
             || field.ProcessId != _sessionPid
             || !string.Equals(field.StableFieldIdentity, presentation.StableFieldIdentity, StringComparison.Ordinal)
@@ -1289,6 +1406,8 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
         _sessionPid = 0;
         _generationInFlight = false;
         _inFlightPid = 0;
+        _inFlightStableFieldIdentity = null;
+        _inFlightProcessName = null;
         _inFlightRequestId = null;
         _heldPresentationText = null;
         PublishSessionSnapshot(null);

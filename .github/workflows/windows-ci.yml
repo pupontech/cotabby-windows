@@ -113,11 +113,13 @@ jobs:
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)
           Copy-Item docs/tabtype-phase1.md (Join-Path $root TABTYPE-PHASE1-NOTES.md)
+          Copy-Item docs/tabtype-per-app-profiles.md (Join-Path $root APP-PROFILES-NOTES.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
             'Keep runtimes/win-x64 beside the executable. No .NET installation is required.'
             'This build uses your existing Cotabby settings and model cache.'
+            'Apps profiles: add notepad with phrase acceptance, switch to another app (global settings), then edit/inherit/remove and restart. See APP-PROFILES-NOTES.md.'
             'Test tabby-2-nano first, then tabby-2-plus when memory permits.'
             'Try single-line and multi-line completion, the longest length preset, and a mid-line caret.'
             'Open Settings > Performance. Wait at least two samples; unknown GPU fields show a dash.'

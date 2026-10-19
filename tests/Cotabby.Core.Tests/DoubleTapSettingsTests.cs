@@ -7,6 +7,70 @@ namespace Cotabby.Core.Tests;
 
 public sealed class DoubleTapSettingsTests
 {
+    [Fact]
+    public void SettingsStoreLoadSkipsMalformedProfileAndPreservesGlobalSafetySettings()
+    {
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"cotabby-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(settingsPath,
+                "{\"Enabled\":false,\"BlockedApps\":[\"password-manager\"],\"AppProfiles\":[{\"ProcessName\":\"notepad\",\"DebounceMs\":\"bad\"},{\"ProcessName\":42},{\"ProcessName\":\"word\",\"Enabled\":\"false\"},4,[],null,{\"ProcessName\":\"code\",\"Enabled\":true}]}");
+
+            var loaded = new SettingsStore(settingsPath).Load();
+
+            Assert.False(loaded.Enabled);
+            Assert.Equal(new[] { "password-manager" }, loaded.BlockedApps);
+            Assert.Collection(loaded.AppProfiles!, profile => Assert.Null(profile), profile =>
+            {
+                Assert.NotNull(profile);
+                Assert.Equal("code", profile.ProcessName);
+                Assert.True(profile.Enabled);
+            });
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+    }
+
+    [Fact]
+    public void SettingsStoreLoadIgnoresMalformedProfileContainerAndPreservesGlobalSafetySettings()
+    {
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"cotabby-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(settingsPath,
+                "{\"Enabled\":false,\"BlockedApps\":[\"password-manager\"],\"AppProfiles\":{\"ProcessName\":\"notepad\"}}");
+
+            var loaded = new SettingsStore(settingsPath).Load();
+
+            Assert.False(loaded.Enabled);
+            Assert.Equal(new[] { "password-manager" }, loaded.BlockedApps);
+            Assert.Empty(loaded.AppProfiles!);
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+    }
+
+    [Fact]
+    public void AppProfilesAreAdditiveAndRoundTripIncludingNullEntries()
+    {
+        var legacy = JsonSerializer.Deserialize<AppSettings>("{}")!;
+        Assert.Empty(legacy.AppProfiles!);
+
+        var loaded = JsonSerializer.Deserialize<AppSettings>(
+            "{\"AppProfiles\":[null,{\"ProcessName\":\"notepad\",\"Enabled\":false,\"AcceptanceMode\":\"phrase\"}]}")!;
+        var saved = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(loaded))!;
+
+        Assert.Equal(2, saved.AppProfiles!.Count);
+        Assert.Null(saved.AppProfiles[0]);
+        Assert.Equal("notepad", saved.AppProfiles[1]!.ProcessName);
+        Assert.False(saved.AppProfiles[1]!.Enabled);
+        Assert.Equal("phrase", saved.AppProfiles[1]!.AcceptanceMode);
+    }
+
     [Theory]
     [InlineData("{}")]
     [InlineData("{\"Enabled\":true,\"AcceptWordKey\":\"Tab\"}")]

@@ -25,7 +25,7 @@ namespace Cotabby.App.Overlay;
 /// background, foreground color tracks system light/dark, font size derives
 /// from the caret height so ghost text matches the host editor's line height.
 /// </remarks>
-public partial class GhostOverlayWindow : Window, IOverlayPresenter
+public partial class GhostOverlayWindow : Window, IOverlayPresenter, IOverlayDisplayMode
 {
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
@@ -53,6 +53,8 @@ public partial class GhostOverlayWindow : Window, IOverlayPresenter
     private Color? _userColor;
     private double _userOpacity = 1.0;
     private bool _showHint = true;
+    private bool _darkMode;
+    private bool _popupDisplayMode;
 
     public GhostOverlayWindow()
     {
@@ -88,6 +90,18 @@ public partial class GhostOverlayWindow : Window, IOverlayPresenter
         {
             TabKeycap.Visibility = _showHint ? Visibility.Visible : Visibility.Collapsed;
         }
+    }
+
+    public void SetDisplayMode(string displayMode)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => SetDisplayMode(displayMode));
+            return;
+        }
+
+        _popupDisplayMode = string.Equals(displayMode, "popup", StringComparison.OrdinalIgnoreCase);
+        ApplyDisplayModeStyle();
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -220,6 +234,7 @@ public partial class GhostOverlayWindow : Window, IOverlayPresenter
     private void ApplyThemePalette()
     {
         bool darkMode = IsSystemInDarkMode();
+        _darkMode = darkMode;
 
         // The user can override the ghost text color from settings; if they
         // haven't, we pick a translucent gray that contrasts with the host
@@ -247,6 +262,23 @@ public partial class GhostOverlayWindow : Window, IOverlayPresenter
             TabKeycap.BorderBrush = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC));
             TabKeycapLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x73, 0x73, 0x73));
         }
+
+        ApplyDisplayModeStyle();
+    }
+
+    private void ApplyDisplayModeStyle()
+    {
+        GhostRow.Background = _popupDisplayMode
+            ? new SolidColorBrush(_darkMode
+                ? Color.FromArgb(232, 32, 32, 32)
+                : Color.FromArgb(240, 245, 245, 245))
+            : Brushes.Transparent;
+        GhostText.Margin = _popupDisplayMode
+            ? new Thickness(8, 4, _showHint ? 0 : 8, 4)
+            : new Thickness(0);
+        TabKeycap.Margin = _popupDisplayMode
+            ? new Thickness(6, 0, 8, 0)
+            : new Thickness(6, 0, 0, 0);
     }
 
     private static bool IsSystemInDarkMode()

@@ -706,6 +706,47 @@
                                        Text="When enabled, 1Password, KeePass, KeePassXC, Bitwarden, Enpass and Dashlane are protected by default. Mixed-character runs in single-line fields pause suggestions until whitespace. This heuristic can pause code or identifiers and is not guaranteed password detection. Existing credential protection always stays on." />
                         </StackPanel>
                     </Border>
+                    <TextBlock Style="{StaticResource CardHeader}" Text="Per-app suggestion profiles" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Text="Override suggestion behavior by process name. Unset values inherit global settings. Disabled apps and privacy protections always win." />
+                            <ListBox x:Name="AppProfileList" MaxHeight="130" Margin="0,8,0,8" DisplayMemberPath="ProcessName" SelectionChanged="OnAppProfileSelected" />
+                            <TextBlock Text="Process name (for example notepad)" />
+                            <TextBox x:Name="ProfileProcessBox" Style="{StaticResource Input}" Margin="0,4,0,8" />
+                            <TextBlock Text="Suggestions" />
+                            <ComboBox x:Name="ProfileEnabledCombo" Margin="0,4,0,8">
+                                <ComboBoxItem Content="Inherit" Tag="" /><ComboBoxItem Content="Enabled" Tag="true" /><ComboBoxItem Content="Disabled" Tag="false" />
+                            </ComboBox>
+                            <TextBlock Text="Tab acceptance" />
+                            <ComboBox x:Name="ProfileAcceptanceCombo" Margin="0,4,0,8">
+                                <ComboBoxItem Content="Inherit" Tag="" /><ComboBoxItem Content="Word" Tag="word" /><ComboBoxItem Content="Phrase" Tag="phrase" />
+                            </ComboBox>
+                            <TextBlock Text="Completion length" />
+                            <ComboBox x:Name="ProfileLengthCombo" Margin="0,4,0,8">
+                                <ComboBoxItem Content="Inherit" Tag="" /><ComboBoxItem Content="2–4 words" Tag="very_short" /><ComboBoxItem Content="4–7 words" Tag="short" /><ComboBoxItem Content="7–12 words" Tag="medium" /><ComboBoxItem Content="12–20 words" Tag="long" />
+                            </ComboBox>
+                            <TextBlock Text="Display mode" />
+                            <ComboBox x:Name="ProfileDisplayCombo" Margin="0,4,0,8">
+                                <ComboBoxItem Content="Inherit" Tag="" /><ComboBoxItem Content="Automatic" Tag="auto" /><ComboBoxItem Content="Inline" Tag="inline" /><ComboBoxItem Content="Popup" Tag="popup" />
+                            </ComboBox>
+                            <TextBlock Text="Multiline suggestions" />
+                            <ComboBox x:Name="ProfileMultilineCombo" Margin="0,4,0,8">
+                                <ComboBoxItem Content="Inherit" Tag="" /><ComboBoxItem Content="Allowed" Tag="true" /><ComboBoxItem Content="Single line only" Tag="false" />
+                            </ComboBox>
+                            <TextBlock Text="Debounce in ms (20–300; blank inherits)" />
+                            <TextBox x:Name="ProfileDebounceBox" Style="{StaticResource Input}" Margin="0,4,0,8" />
+                            <TextBlock Text="Single-line tokens (4–96; blank uses preset/global)" />
+                            <TextBox x:Name="ProfileSingleTokensBox" Style="{StaticResource Input}" Margin="0,4,0,8" />
+                            <TextBlock Text="Multiline tokens (4–128; blank uses preset/global)" />
+                            <TextBox x:Name="ProfileMultiTokensBox" Style="{StaticResource Input}" Margin="0,4,0,8" />
+                            <TextBlock x:Name="ProfileValidationText" TextWrapping="Wrap" Foreground="#DC2626" Margin="0,0,0,8" />
+                            <WrapPanel>
+                                <Button x:Name="ProfileNewButton" Style="{StaticResource Btn}" Content="New / reset editor" Click="OnNewAppProfile" Margin="0,0,8,8" />
+                                <Button x:Name="ProfileSaveButton" Style="{StaticResource Btn}" Content="Save profile" Click="OnSaveAppProfile" Margin="0,0,8,8" />
+                                <Button x:Name="ProfileRemoveButton" Style="{StaticResource Btn}" Content="Remove selected" Click="OnRemoveAppProfile" Margin="0,0,0,8" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Style="{StaticResource CardHeader}" Text="Disabled Apps" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>

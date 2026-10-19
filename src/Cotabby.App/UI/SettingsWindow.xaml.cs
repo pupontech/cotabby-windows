@@ -860,6 +860,115 @@ public partial class SettingsWindow : Window
     {
         SmarterFieldsToggle.IsChecked = _host.Settings.SmarterFieldSuppression;
         BuildBlockedAppRows();
+        BuildAppProfileRows();
+        LoadAppProfileEditor(null);
+    }
+
+    private AppProfile? _editingAppProfile;
+
+    private void BuildAppProfileRows()
+    {
+        AppProfileList.ItemsSource = (_host.Settings.AppProfiles ?? new()).Where(p => p is not null).ToList();
+    }
+
+    private static string? ProfileChoice(ComboBox combo) =>
+        (combo.SelectedItem as ComboBoxItem)?.Tag is string { Length: > 0 } value ? value : null;
+
+    private static void SelectProfileChoice(ComboBox combo, string? value)
+    {
+        combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().FirstOrDefault(item =>
+            string.Equals(item.Tag as string, value ?? "", StringComparison.OrdinalIgnoreCase)) ?? combo.Items[0];
+    }
+
+    private void LoadAppProfileEditor(AppProfile? profile)
+    {
+        _editingAppProfile = profile;
+        ProfileProcessBox.Text = profile?.ProcessName ?? "";
+        SelectProfileChoice(ProfileEnabledCombo, profile?.Enabled?.ToString().ToLowerInvariant());
+        SelectProfileChoice(ProfileAcceptanceCombo, profile?.AcceptanceMode);
+        SelectProfileChoice(ProfileLengthCombo, profile?.CompletionLengthPreset);
+        SelectProfileChoice(ProfileDisplayCombo, profile?.DisplayMode);
+        SelectProfileChoice(ProfileMultilineCombo, profile?.AllowMultiLine?.ToString().ToLowerInvariant());
+        ProfileDebounceBox.Text = profile?.DebounceMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        ProfileSingleTokensBox.Text = profile?.MaxTokensSingleLine?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        ProfileMultiTokensBox.Text = profile?.MaxTokensMultiLine?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        ProfileValidationText.Text = "";
+        ProfileRemoveButton.IsEnabled = profile is not null;
+    }
+
+    private void OnAppProfileSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        LoadAppProfileEditor(AppProfileList.SelectedItem as AppProfile);
+    }
+
+    private void OnNewAppProfile(object sender, RoutedEventArgs e)
+    {
+        AppProfileList.SelectedItem = null;
+        LoadAppProfileEditor(null);
+    }
+
+    private void OnRemoveAppProfile(object sender, RoutedEventArgs e)
+    {
+        if (_editingAppProfile is null) return;
+        _host.Settings.AppProfiles?.Remove(_editingAppProfile);
+        _host.PersistSettings();
+        BuildAppProfileRows();
+        LoadAppProfileEditor(null);
+    }
+
+    private void OnSaveAppProfile(object sender, RoutedEventArgs e)
+    {
+        var name = ProfileProcessBox.Text.Trim();
+        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name = name[..^4];
+        int? Number(TextBox box, int min, int max)
+        {
+            if (string.IsNullOrWhiteSpace(box.Text)) return null;
+            if (!int.TryParse(box.Text, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var value) || value < min || value > max)
+                throw new ArgumentException($"Enter a whole number from {min} to {max}, or leave blank to inherit.");
+            return value;
+        }
+        try
+        {
+            if (AppProfile.GetProcessNameValidationError(name, Process.GetCurrentProcess().ProcessName) is { } nameError)
+                throw new ArgumentException(nameError);
+            var profile = new AppProfile
+            {
+                ProcessName = name,
+                Enabled = ProfileChoice(ProfileEnabledCombo) is { } enabled ? bool.Parse(enabled) : null,
+                AcceptanceMode = ProfileChoice(ProfileAcceptanceCombo),
+                CompletionLengthPreset = ProfileChoice(ProfileLengthCombo),
+                DisplayMode = ProfileChoice(ProfileDisplayCombo),
+                AllowMultiLine = ProfileChoice(ProfileMultilineCombo) is { } multiline ? bool.Parse(multiline) : null,
+                DebounceMs = Number(ProfileDebounceBox, 20, 300),
+                MaxTokensSingleLine = Number(ProfileSingleTokensBox, 4, 96),
+                MaxTokensMultiLine = Number(ProfileMultiTokensBox, 4, 128),
+            };
+            if (!Cotabby.Core.Settings.AppProfileResolver.IsValidProfile(new Cotabby.Core.Settings.AppProfileOverride
+                {
+                    ProcessName = name, Enabled = profile.Enabled, AcceptanceMode = profile.AcceptanceMode,
+                    CompletionLengthPreset = profile.CompletionLengthPreset, DisplayMode = profile.DisplayMode,
+                    AllowMultiLine = profile.AllowMultiLine, DebounceMs = profile.DebounceMs,
+                    MaxTokensSingleLine = profile.MaxTokensSingleLine, MaxTokensMultiLine = profile.MaxTokensMultiLine,
+                }))
+                throw new ArgumentException("Choose valid profile options; use Inherit to keep the global setting.");
+            var profiles = _host.Settings.AppProfiles ??= new();
+            if (profiles.Any(p => p is not null && !ReferenceEquals(p, _editingAppProfile)
+                    && string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("A profile for this process already exists. Select it to edit instead.");
+            int index = _editingAppProfile is null ? -1 : profiles.IndexOf(_editingAppProfile);
+            if (index >= 0) profiles[index] = profile;
+            else profiles.Add(profile);
+            _host.PersistSettings();
+            BuildAppProfileRows();
+            AppProfileList.SelectedItem = profile;
+            LoadAppProfileEditor(profile);
+        }
+        catch (ArgumentException error)
+        {
+            ProfileValidationText.Text = error.Message;
+        }
     }
 
     private void OnSmarterFieldsChanged(object sender, RoutedEventArgs e)

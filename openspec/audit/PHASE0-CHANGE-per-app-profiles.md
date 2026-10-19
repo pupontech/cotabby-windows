@@ -114,7 +114,7 @@ behavior; credential-field suppression MUST remain global.
 - `SelfProfile_IsRefused`
 - `EmptyOverrideInheritsGlobal` (null members)
 - `ProfileForBlockedApp_DoesNotResurrectSuggestions` (blocklist wins)
-- `ConflictingProfiles_FirstMatchWinsDeterministically`
+- `ConflictingProfiles_FallBackToGlobalsDeterministically` (duplicate valid keys are ambiguous; list order never selects a winner)
 
 `DoubleTapSettingsTests.cs` additions:
 

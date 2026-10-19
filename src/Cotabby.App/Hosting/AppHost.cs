@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
@@ -138,7 +139,11 @@ public sealed class AppHost : IAsyncDisposable
     /// </summary>
     public void ApplyRuntimeSettings()
     {
-        Coordinator.Enabled = Settings.Enabled;
+        if (EmojiPicker is not null) EmojiPicker.Enabled = false;
+        // Quiesce admission while settings are replaced. The global enabled bit
+        // is restored only by ConfigureProfileSettings, after the latest
+        // blocklist has been installed.
+        Coordinator.Enabled = false;
         Statistics.Enabled = Settings.EnableSuggestionStatistics;
         if (Services.GetRequiredService<IFocusTracker>() is UiaFocusTracker uiaTracker)
             uiaTracker.SmarterFieldSuppression = Settings.SmarterFieldSuppression;
@@ -147,25 +152,13 @@ public sealed class AppHost : IAsyncDisposable
         Coordinator.PowerProvider = PowerMonitor;
         Coordinator.BatteryAwareInference = Settings.BatteryAwareInference;
         Coordinator.BatteryThresholdPercent = Settings.BatteryThresholdPercent;
-        Coordinator.RequestDebounce = TimeSpan.FromMilliseconds(Math.Clamp(Settings.DebounceMs, 20, 300));
-
-        var (single, multi) = CompletionLengthPreset.Tokens(Settings.CompletionLengthPreset);
-        Coordinator.MaxTokensSingleLine = single;
-        Coordinator.MaxTokensMultiLine = multi;
-        Coordinator.AllowMultiLineSuggestions = Settings.AllowMultiLine;
         Coordinator.AlternateAcceptKey = ParseAlternateAcceptKey(Settings.AcceptSuggestionKey);
         Coordinator.DoubleTapFullAcceptanceEnabled = string.Equals(
             Settings.AcceptSuggestionKey, "DoubleTap", StringComparison.OrdinalIgnoreCase);
-        Coordinator.AcceptanceGranularity = Settings.AcceptanceMode == "phrase" ? "phrase" : "word";
         Coordinator.AcceptPunctuationWithWord = Settings.AcceptPunctuationWithWord;
         Coordinator.UserName = Settings.UserName;
         Coordinator.LanguageInstruction =
             Cotabby.Core.Support.BaseCompletionPromptRenderer.LanguageInstruction(Settings.Languages) ?? "";
-
-        if (EmojiPicker is not null)
-        {
-            EmojiPicker.Enabled = Settings.EmojiPickerEnabled;
-        }
 
         if (Settings.BlockedApps is { Count: > 0 } list)
         {
@@ -174,6 +167,20 @@ public sealed class AppHost : IAsyncDisposable
         else
         {
             Coordinator.BlockedApps = null;
+        }
+
+        // The blocklist is a non-overridable admission gate. Install it before
+        // the mapped snapshot so the coordinator resolves profiles against the
+        // current global safety policy as one ordered UI-thread update.
+        var suggestionSettings = AppProfileSettingsMapper.Map(Settings);
+        Coordinator.ConfigureProfileSettings(
+            suggestionSettings.Global,
+            suggestionSettings.Profiles,
+            Process.GetCurrentProcess().ProcessName);
+
+        if (EmojiPicker is not null)
+        {
+            EmojiPicker.Enabled = Settings.Enabled && Settings.EmojiPickerEnabled;
         }
 
         // Best-effort. The registry write fails silently in restricted
