@@ -36,6 +36,9 @@ is not universal host acknowledgement. Known partial Unicode event dispatch
 raises an indeterminate outcome; acceptance retires only the owning offer so the
 same full chunk cannot be accepted again. A newer replacement request is not
 cancelled by the old failure. This prevents replay, not rollback of host text.
+Emoji commits also require live strategy admission before suppressing the host
+key and again before erasing `:query:`; a known unsupported mode must preserve
+the user's query rather than deleting it before a refused insertion.
 Never retry another transport after a partial or irreversible dispatch.
 
 ## Why forced Unicode is deferred

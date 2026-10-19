@@ -45,7 +45,9 @@ version bump, tag or release is implied.
    strings fall back to Auto. Malformed typed strategy values preserve globals.
 5. Preserve supported-path credential/secure checks, target/owner revalidation,
    same-thread BlockInput/inject/unblock for paste, clipboard ownership/restore
-   and irreversible cleanup. Known partial Unicode native counts raise a typed
+   and irreversible cleanup. Emoji admission must be live, fail closed when
+   unwired, and run before host-key suppression and again before query deletion.
+   Known partial Unicode native counts raise a typed
    indeterminate result; retire only the owning acceptance offer, never replay
    its full text or cancel a newer request.
 6. TDD selector/settings regressions, actual Windows Advanced controls,

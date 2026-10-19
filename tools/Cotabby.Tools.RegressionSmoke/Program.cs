@@ -508,16 +508,16 @@ internal static class Program
                 var emojiPicker = new Cotabby.App.Emoji.EmojiPickerController(
                     emojiHook, tracker, inserter, emojiPopup, app.Dispatcher,
                     NullLogger<Cotabby.App.Emoji.EmojiPickerController>.Instance);
-                host.RegisterEmojiPicker(emojiPicker); // Exercises the production admission wiring.
                 bool enabledBeforeEmoji = host.Settings.Enabled;
                 bool emojiEnabledBefore = host.Settings.EmojiPickerEnabled;
                 try
                 {
                     host.Settings.Enabled = true;
                     host.Settings.EmojiPickerEnabled = true;
-                    foreach (string unsupported in new[] { "uia", "unicode" })
+                    foreach (string unsupported in new[] { "unwired", "uia", "unicode" })
                     {
-                        host.Settings.InsertionStrategy = unsupported;
+                        if (unsupported != "unwired") host.RegisterEmojiPicker(emojiPicker);
+                        host.Settings.InsertionStrategy = unsupported == "unwired" ? "auto" : unsupported;
                         host.ApplyRuntimeSettings();
                         const string queryText = ":smile:";
                         box.Text = queryText;
@@ -558,6 +558,40 @@ internal static class Program
                             $"unsupported {unsupported} direct emoji commit bypassed deletion admission");
                     }
                     Console.WriteLine("EMOJI_UNSUPPORTED_STRATEGY_QUERY_AND_HOST_KEY_PRESERVED=PASS");
+                    foreach (string supported in new[] { "auto", "clipboard" })
+                    {
+                        host.Settings.InsertionStrategy = supported;
+                        host.ApplyRuntimeSettings();
+                        const string queryText = ":smile:";
+                        box.Text = queryText;
+                        fixture.Activate();
+                        box.Focus();
+                        box.CaretIndex = box.Text.Length;
+                        await Task.Delay(120);
+                        Require(box.IsKeyboardFocused, "supported emoji fixture has no keyboard focus");
+                        await Task.Run(() =>
+                        {
+                            foreach (char c in ":smile") emojiHook.Emit(c);
+                        });
+                        await Task.Delay(80);
+                        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var state = (EmojiTriggerStateMachine)typeof(Cotabby.App.Emoji.EmojiPickerController)
+                            .GetField("_state", flags)!.GetValue(emojiPicker)!;
+                        var matches = (List<EmojiEntry>)typeof(Cotabby.App.Emoji.EmojiPickerController)
+                            .GetField("_matches", flags)!.GetValue(emojiPicker)!;
+                        Require(state.IsActive && state.Query == "smile" && matches.Count > 0 && box.IsKeyboardFocused,
+                            "supported emoji proof did not arm a deletion-capable query");
+                        EmojiEntry selectedEmoji = matches[0];
+                        Require(emojiPicker.CommitAdmission?.Invoke(selectedEmoji.Glyph) == true,
+                            $"live emoji admission rejected supported {supported}");
+                        var commitKey = await Task.Run(() => emojiHook.Emit(':'));
+                        await Task.Delay(300);
+                        Require(state.LastCommittedQuery == "smile" && state.QueryAtCommitLength == queryText.Length,
+                            "supported emoji proof did not reach the real commit state");
+                        Require(commitKey.Suppress && box.Text == selectedEmoji.Glyph,
+                            $"supported {supported} emoji commit did not replace the fixture query exactly");
+                    }
+                    Console.WriteLine("EMOJI_SUPPORTED_STRATEGY_LIVE_ADMISSION_AND_REAL_REPLACEMENT=PASS");
                 }
                 finally
                 {

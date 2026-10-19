@@ -55,6 +55,12 @@ public sealed class AppHost : IAsyncDisposable
 
     public void RegisterEmojiPicker(Cotabby.App.Emoji.EmojiPickerController picker)
     {
+        var inserter = Services.GetRequiredService<SendInputTextInserter>();
+        picker.CommitAdmission = glyph =>
+            Settings.Enabled
+            && Settings.EmojiPickerEnabled
+            && picker.Enabled
+            && InsertionStrategySelector.TrySelect(inserter.InsertionStrategy, glyph, out _);
         EmojiPicker = picker;
     }
 
