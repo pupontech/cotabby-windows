@@ -323,7 +323,9 @@ internal static class Program
                 Require(await queuedInsertion, "queued Unicode insertion was refused");
                 expected += queuedUnicodeChunk;
                 await Task.Delay(180);
-                Require(box.Text == expected, "queued insertion did not use the strategy captured before waiting");
+                Require(box.Text == expected,
+                    $"queued Unicode host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}; " +
+                    $"clipboard sequence before={sequenceBeforeQueuedInsertion}, after={GetClipboardSequenceNumber()}");
                 Require(GetClipboardSequenceNumber() == sequenceBeforeQueuedInsertion
                     && Clipboard.GetText() == "queued strategy snapshot sentinel",
                     "queued Unicode insertion used the later clipboard strategy");

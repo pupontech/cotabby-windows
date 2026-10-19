@@ -78,9 +78,9 @@ public sealed class SendInputTextInserter : ITextInserter
                 {
                     ct.ThrowIfCancellationRequested();
                     if (!TargetStillFocused(target)) return false;
-                    // Only explicit long Unicode opts into pacing; Auto keeps
-                    // its original one-batch short-text behavior exactly.
-                    return text.Length > 24 && string.Equals(strategySnapshot, "unicode", StringComparison.OrdinalIgnoreCase)
+                    // Explicit Unicode bounds event bursts even below Auto's
+                    // legacy cutoff; Auto retains its existing behavior exactly.
+                    return text.Length > 8 && string.Equals(strategySnapshot, "unicode", StringComparison.OrdinalIgnoreCase)
                         ? SendPacedUnicodeString(target, text, ct)
                         : SendUnicodeString(text);
                 }, ct).ConfigureAwait(false);

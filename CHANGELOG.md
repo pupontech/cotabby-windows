@@ -8,6 +8,9 @@
   replacement is not safe caret insertion. Malformed strategy JSON cannot reset
   unrelated safety settings. Exact verification is recorded in the feature PR;
   no release/live acceptance is implied. [Scope](docs/tabtype-insertion-strategies.md).
+- Explicit Unicode above eight UTF-16 code units uses isolated paced bursts after exact Windows host-text
+  readback exposed character loss in one large event batch. Auto is unchanged;
+  input isolation failure refuses without clipboard fallback.
 
 - Per-app suggestion profiles: nullable behavior overrides with global safety
   gates retained, an Apps-pane editor, and stale-target retirement. Verification:

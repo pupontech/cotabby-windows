@@ -19,9 +19,14 @@ a setting change applies to the next call, not half of an already queued write.
   no LF (`\n`) uses one Unicode SendInput batch; other text uses clipboard paste.
   CR-only handling is not silently changed. This is a transport heuristic, not
   proof that a host retained the characters.
-- `unicode`: use the Unicode batch even for long/multiline text; do not read or
-  write the clipboard and do not silently retry through clipboard. Some hosts
-  can drop long Unicode bursts; use auto if this is unreliable in a real app.
+- `unicode`: never read/write the clipboard or silently retry through it. Explicit
+  text longer than eight UTF-16 code units uses small paced bursts, keeping valid
+  surrogate pairs together, on one native thread with input blocked until cleanup.
+  If input isolation is unavailable it refuses before writing. Focus is checked
+  between bursts; cancellation after initial dispatch does not interrupt the text.
+  A later focus/native failure can leave partial text: there is no retry, rollback
+  or clipboard fallback. Host applications may still interpret injected characters
+  or line endings differently; use auto if this is unreliable in a real app.
 - `clipboard`: use the existing clipboard-preserving paste path even for short
   text. Clipboard contents temporarily change. Existing native-format capture,
   sequence ownership, same-thread input blocking/injection/unblocking and
