@@ -394,7 +394,9 @@ internal static class Program
                     Require(indeterminate && focusSwitched && replacementBox.IsKeyboardFocused,
                         "partial Unicode dispatch was not distinguished from pre-dispatch refusal");
                     Require(box.Text == beforePartial + partialChunk[..8] && replacementBox.Text == "replacement ",
-                        "paced Unicode did not stop before writing to the replacement field");
+                        $"paced Unicode partial host readback mismatch; original delta={box.Text.Length - beforePartial.Length}; " +
+                        $"replacement delta={replacementBox.Text.Length - "replacement ".Length}; " +
+                        $"original remains prefix={box.Text.StartsWith(beforePartial, StringComparison.Ordinal)}");
                     Console.WriteLine("PRODUCTION_INSERTER_PARTIAL_UNICODE_FOCUS_LOSS_TYPED=PASS");
                 }
                 finally
