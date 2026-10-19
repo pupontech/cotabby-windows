@@ -24,10 +24,13 @@ public sealed class InsertionStrategySelectorTests
         Assert.Equal(InsertionMethod.Clipboard, Select("auto", new string('a', 23) + "😀"));
     }
 
-    [Fact]
-    public void ExplicitUnicode_AlwaysSelectsUnicodeIncludingLongMultilineText()
+    [Theory]
+    [InlineData("unicode")]
+    [InlineData("UNICODE")]
+    [InlineData("UnIcOdE")]
+    public void ExplicitUnicode_IsUnsupportedEvenForLongRequests(string strategy)
     {
-        Assert.Equal(InsertionMethod.Unicode, Select("unicode", new string('x', 500) + "\n😀"));
+        Assert.False(InsertionStrategySelector.TrySelect(strategy, new string('x', 500) + "\n😀", out _));
     }
 
     [Fact]
@@ -52,6 +55,7 @@ public sealed class InsertionStrategySelectorTests
     {
         Assert.False(InsertionStrategySelector.TrySelect("uia", "text", out _));
         Assert.False(InsertionStrategySelector.TrySelect("UIA", "text", out _));
+        Assert.False(InsertionStrategySelector.TrySelect("UiA", "text", out _));
     }
 
     private static InsertionMethod Select(string? strategy, string text)

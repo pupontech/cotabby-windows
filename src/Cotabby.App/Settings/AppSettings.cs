@@ -86,7 +86,7 @@ public sealed class AppSettings
     public bool EnableSuggestionStatistics { get; set; }
     public bool BatteryAwareInference { get; set; }
     public int BatteryThresholdPercent { get; set; } = 40;
-    /// <summary>Global text insertion path: <c>auto</c>, <c>unicode</c>, or <c>clipboard</c>.</summary>
+    /// <summary>Global insertion choice: <c>auto</c> or <c>clipboard</c>. Stored <c>unicode</c>/<c>uia</c> values are unsupported and refused.</summary>
     [JsonConverter(typeof(InsertionStrategySettingJsonConverter))]
     public string InsertionStrategy { get; set; } = "auto";
     public string LogVerbosity { get; set; } = "information";

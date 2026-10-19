@@ -47,7 +47,9 @@ malformed-profile whole-settings reset were fixed with regressions. [Contract an
 No Phase 2 release or live acceptance is implied.
 
 Next slice is implemented on `feat/tabtype-insertion-strategies`, stacked
-on `80d4c29`: Auto/Unicode/Clipboard selection with the existing safety contract.
+on `80d4c29`: Auto/Clipboard selection with the existing safety contract. Forced
+Unicode is deferred after Windows wrong-field proof; explicit stored Unicode
+requests refuse without clipboard fallback. Auto's legacy heuristic is unchanged.
 The phase-0 UIA write proposal is deferred because TextPattern has no setter;
 whole-field ValuePattern writes are not a safe caret-insertion replacement.
 [Insertion scope and limits](docs/tabtype-insertion-strategies.md).

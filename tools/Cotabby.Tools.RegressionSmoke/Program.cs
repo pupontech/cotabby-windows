@@ -8,6 +8,8 @@ using Cotabby.App.Hosting;
 using Cotabby.App.Overlay;
 using Cotabby.App.UI;
 using Cotabby.Core.Focus;
+using Cotabby.Core.Emoji;
+using Cotabby.Core.Input;
 using Cotabby.Core.Insertion;
 using Cotabby.Win32.Insertion;
 using Cotabby.Win32.Focus;
@@ -65,8 +67,14 @@ internal static class Program
                 Require(ReferenceEquals(interfaceInserter, productionInserter),
                     "ITextInserter and concrete service did not resolve to the same instance");
                 var strategyExplanation = (TextBlock)settings.FindName("InsertionStrategyExplanation");
+                var strategyTags = strategyCombo.Items.Cast<ComboBoxItem>()
+                    .Select(item => item.Tag as string).ToHashSet(StringComparer.Ordinal);
                 Require(strategyCombo.SelectedIndex == -1
+                    && strategyCombo.Items.Count == 2
+                    && strategyTags.SetEquals(new[] { "auto", "clipboard" })
                     && strategyExplanation.Text.Contains("unsupported", StringComparison.OrdinalIgnoreCase)
+                    && strategyExplanation.Text.Contains("deferred", StringComparison.OrdinalIgnoreCase)
+                    && strategyExplanation.Text.Contains("uia", StringComparison.OrdinalIgnoreCase)
                     && host.SettingsStore.Load().InsertionStrategy == "uia"
                     && productionInserter.InsertionStrategy == "uia",
                     "manually stored UIA strategy was not visibly refused without a selectable UIA mode");
@@ -76,13 +84,15 @@ internal static class Program
                     && host.SettingsStore.Load().InsertionStrategy == "clipboard"
                     && productionInserter.InsertionStrategy == "clipboard",
                     "Advanced insertion strategy did not update runtime and persisted settings");
+                RequireInsertionStrategySurvivesReload(host, "clipboard");
                 strategyCombo.SelectedItem = strategyCombo.Items.Cast<ComboBoxItem>()
                     .Single(item => (string)item.Tag == "auto");
                 Require(host.Settings.InsertionStrategy == "auto"
                     && host.SettingsStore.Load().InsertionStrategy == "auto"
                     && productionInserter.InsertionStrategy == "auto",
                     "Advanced insertion strategy did not restore automatic mode");
-                Console.WriteLine("INSERTION_STRATEGY_ADVANCED_UI_PERSISTENCE_LIVE_SAME_INSTANCE=PASS");
+                RequireInsertionStrategySurvivesReload(host, "auto");
+                Console.WriteLine("INSERTION_STRATEGY_ADVANCED_UI_SUPPORTED_CHOICES_PERSIST_RUNTIME_RELOAD=PASS");
                 var logCombo = (ComboBox)settings.FindName("LogVerbosityCombo");
                 Require(logCombo.IsVisible, "log verbosity control not visible");
                 logCombo.SelectedIndex = 2;
@@ -189,6 +199,34 @@ internal static class Program
                 Console.WriteLine("TABTYPE_PROFILE_REAL_SETTINGS_ADD_EDIT_REMOVE_VALIDATION_INHERIT_PERSISTENCE=PASS");
                 settings.Close();
 
+                host.Settings.InsertionStrategy = "UnIcOdE";
+                host.PersistSettings();
+                var unicodeSettings = new SettingsWindow(host);
+                unicodeSettings.Show();
+                ((ListBox)unicodeSettings.FindName("NavList")).SelectedIndex = 5;
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                var unicodeStrategyCombo = (ComboBox)unicodeSettings.FindName("InsertionStrategyCombo");
+                var unicodeStrategyExplanation = (TextBlock)unicodeSettings.FindName("InsertionStrategyExplanation");
+                Require(unicodeStrategyCombo.SelectedIndex == -1
+                    && unicodeStrategyCombo.Items.Count == 2
+                    && host.SettingsStore.Load().InsertionStrategy == "UnIcOdE"
+                    && productionInserter.InsertionStrategy == "UnIcOdE"
+                    && unicodeStrategyExplanation.Text.Contains("'unicode'", StringComparison.OrdinalIgnoreCase)
+                    && unicodeStrategyExplanation.Text.Contains("unsupported", StringComparison.OrdinalIgnoreCase)
+                    && unicodeStrategyExplanation.Text.Contains("deferred", StringComparison.OrdinalIgnoreCase)
+                    && unicodeStrategyExplanation.Text.Contains("without clipboard fallback", StringComparison.OrdinalIgnoreCase),
+                    "manually stored Unicode strategy was not visibly refused without being coerced");
+                var unrelatedLogCombo = (ComboBox)unicodeSettings.FindName("LogVerbosityCombo");
+                unrelatedLogCombo.SelectedIndex = 2;
+                Require(host.Settings.LogVerbosity == "warning"
+                    && host.Settings.InsertionStrategy == "UnIcOdE"
+                    && host.SettingsStore.Load().InsertionStrategy == "UnIcOdE"
+                    && productionInserter.InsertionStrategy == "UnIcOdE",
+                    "unrelated settings persistence coerced the stored Unicode strategy");
+                unrelatedLogCombo.SelectedIndex = 0;
+                unicodeSettings.Close();
+                Console.WriteLine("INSERTION_STRATEGY_STORED_UNICODE_WARNING_NO_SELECTION_NO_COERCION=PASS");
+
                 var box = new TextBox { AcceptsReturn = true, Text = "seed ", FontSize = 18 };
                 var fixture = new Window { Content = box, Width = 700, Height = 300, Title = "Cotabby production insertion proof" };
                 fixture.Show();
@@ -201,12 +239,34 @@ internal static class Program
                 var target = await Task.Run(() => tracker.Refresh());
                 Require(target is { IsCredentialField: false, StableFieldIdentity: not null }, "fixture has no proven UIA identity");
                 var inserter = host.Services.GetRequiredService<SendInputTextInserter>();
+                foreach (string unsupportedStrategy in new[] { "unicode", "UnIcOdE", "uia", "UIA" })
+                {
+                    host.Settings.InsertionStrategy = unsupportedStrategy;
+                    host.PersistSettings();
+                    var reloadedUnsupported = host.SettingsStore.Load();
+                    inserter.InsertionStrategy = reloadedUnsupported.InsertionStrategy;
+                    const string unsupportedClipboardSentinel = "unsupported strategy clipboard sentinel";
+                    Clipboard.SetText(unsupportedClipboardSentinel);
+                    uint unsupportedClipboardSequence = GetClipboardSequenceNumber();
+                    string beforeUnsupported = box.Text;
+                    bool unsupportedInserted = await Task.Run(() =>
+                        inserter.InsertAsync(target!, "unsupported probe", CancellationToken.None));
+                    await Task.Delay(40);
+                    Require(!unsupportedInserted && box.Text == beforeUnsupported && box.IsKeyboardFocused
+                        && reloadedUnsupported.InsertionStrategy == unsupportedStrategy
+                        && inserter.InsertionStrategy == unsupportedStrategy
+                        && GetClipboardSequenceNumber() == unsupportedClipboardSequence
+                        && Clipboard.GetText() == unsupportedClipboardSentinel,
+                        $"stored {unsupportedStrategy} strategy was not refused before touching the focused host or clipboard");
+                }
+                Console.WriteLine("PRODUCTION_INSERTER_STORED_UNICODE_UIA_REFUSED_PRE_DISPATCH_NO_CLIPBOARD=PASS");
+                host.Settings.InsertionStrategy = "auto";
+                host.PersistSettings();
+
                 var staleModes = new[]
                 {
                     ("auto", "stale short"),
-                    ("unicode", new string('u', 80)),
                     ("clipboard", "stale clipboard"),
-                    ("uia", "stale unsupported"),
                 };
                 Clipboard.SetText("stale-target clipboard sentinel");
                 uint staleSequence = GetClipboardSequenceNumber();
@@ -228,7 +288,7 @@ internal static class Program
                         && Clipboard.GetText() == "stale-target clipboard sentinel",
                         $"stale {strategy} attempt touched the clipboard");
                 }
-                Console.WriteLine("PRODUCTION_INSERTER_STALE_TARGET_REFUSED_AUTO_UNICODE_CLIPBOARD_UIA=PASS");
+                Console.WriteLine("PRODUCTION_INSERTER_STALE_TARGET_REFUSED_AUTO_CLIPBOARD=PASS");
                 otherWindow.Close();
                 fixture.Activate();
                 box.Focus();
@@ -240,9 +300,7 @@ internal static class Program
                 var protectedModes = new[]
                 {
                     ("auto", "protected short"),
-                    ("unicode", new string('p', 80)),
                     ("clipboard", "protected clipboard"),
-                    ("uia", "protected unsupported"),
                 };
                 foreach (var (strategy, payload) in protectedModes)
                 {
@@ -257,7 +315,7 @@ internal static class Program
                         && Clipboard.GetText() == "protected-field clipboard sentinel",
                         $"protected {strategy} attempt touched the clipboard");
                 }
-                Console.WriteLine("PRODUCTION_INSERTER_CREDENTIAL_AND_SECURE_REFUSAL_ALL_MODES=PASS");
+                Console.WriteLine("PRODUCTION_INSERTER_CREDENTIAL_AND_SECURE_REFUSAL_AUTO_CLIPBOARD=PASS");
                 inserter.InsertionStrategy = "auto";
                 foreach (var chunk in new[] { "hello ", "world ", "bookkeeper ", "cool ", "... ", "this is a long clipboard-pasted completion with many words. " })
                 {
@@ -272,17 +330,18 @@ internal static class Program
                 Clipboard.SetText("forced Unicode clipboard sentinel");
                 uint unicodeSequence = GetClipboardSequenceNumber();
                 string forcedUnicodeChunk = new string('u', 48) + "😀" + new string('v', 48);
-                Require(forcedUnicodeChunk.Length is >= 25 and <= 128, "forced Unicode fixture length is not bounded");
+                Require(forcedUnicodeChunk.Length == 98, "forced Unicode fixture must remain the original 98 UTF-16-unit payload");
+                string beforeForcedUnicode = box.Text;
                 inserter.InsertionStrategy = "unicode";
-                Require(await Task.Run(() => inserter.InsertAsync(target!, forcedUnicodeChunk, CancellationToken.None)),
-                    "forced long Unicode insertion was refused");
-                expected += forcedUnicodeChunk;
+                bool forcedUnicodeInserted = await Task.Run(() =>
+                    inserter.InsertAsync(target!, forcedUnicodeChunk, CancellationToken.None));
                 await Task.Delay(180);
-                Require(box.Text == expected, $"forced long Unicode host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}");
+                Require(!forcedUnicodeInserted && box.Text == beforeForcedUnicode,
+                    $"unsupported forced Unicode insertion was not refused unchanged; before length={beforeForcedUnicode.Length}, after length={box.Text.Length}");
                 Require(GetClipboardSequenceNumber() == unicodeSequence
                     && Clipboard.GetText() == "forced Unicode clipboard sentinel",
-                    "forced Unicode insertion touched the clipboard");
-                Console.WriteLine("PRODUCTION_INSERTER_FORCED_LONG_UNICODE_EXACT_READBACK_CLIPBOARD_UNTOUCHED=PASS");
+                    "unsupported forced Unicode insertion touched the clipboard");
+                Console.WriteLine("PRODUCTION_INSERTER_FORCED_98_UTF16_UNICODE_REFUSED_HOST_AND_CLIPBOARD_UNCHANGED=PASS");
 
                 Clipboard.SetText("forced clipboard sentinel");
                 uint clipboardSequence = GetClipboardSequenceNumber();
@@ -308,12 +367,12 @@ internal static class Program
                 var insertionGate = gateField?.GetValue(inserter) as SemaphoreSlim
                     ?? throw new InvalidOperationException("inserter serialization gate is unavailable for fixture");
                 await insertionGate.WaitAsync();
-                const string queuedUnicodeChunk = "queued short unicode";
+                const string queuedAutoChunk = "queue";
                 Task<bool> queuedInsertion;
                 try
                 {
-                    inserter.InsertionStrategy = "unicode";
-                    queuedInsertion = inserter.InsertAsync(target!, queuedUnicodeChunk, CancellationToken.None);
+                    inserter.InsertionStrategy = "auto";
+                    queuedInsertion = inserter.InsertAsync(target!, queuedAutoChunk, CancellationToken.None);
                     Require(!queuedInsertion.IsCompleted, "second insertion did not queue behind the held gate");
                     inserter.InsertionStrategy = "clipboard";
                 }
@@ -321,16 +380,16 @@ internal static class Program
                 {
                     insertionGate.Release();
                 }
-                Require(await queuedInsertion, "queued Unicode insertion was refused");
-                expected += queuedUnicodeChunk;
+                Require(await queuedInsertion, "queued Auto insertion was refused");
+                expected += queuedAutoChunk;
                 await Task.Delay(180);
                 Require(box.Text == expected,
-                    $"queued Unicode host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}; " +
+                    $"queued Auto host readback mismatch; expected length={expected.Length}, actual length={box.Text.Length}; " +
                     $"clipboard sequence before={sequenceBeforeQueuedInsertion}, after={GetClipboardSequenceNumber()}");
                 Require(GetClipboardSequenceNumber() == sequenceBeforeQueuedInsertion
                     && Clipboard.GetText() == "queued strategy snapshot sentinel",
-                    "queued Unicode insertion used the later clipboard strategy");
-                Console.WriteLine("PRODUCTION_INSERTER_STRATEGY_SNAPSHOT_BEFORE_GATE=PASS");
+                    "queued Auto insertion used the later clipboard strategy");
+                Console.WriteLine("PRODUCTION_INSERTER_AUTO_STRATEGY_SNAPSHOT_BEFORE_GATE=PASS");
                 inserter.InsertionStrategy = "auto";
 
                 var originalClipboard = new DataObject();
@@ -386,18 +445,17 @@ internal static class Program
                 box.TextChanged += changeFocusAfterFirstBatch;
                 try
                 {
+                    Require(box.IsKeyboardFocused && !replacementBox.IsKeyboardFocused,
+                        "different-window pre-dispatch fixture is not focused on the proven original target");
                     inserter.InsertionStrategy = "unicode";
-                    bool indeterminate = false;
-                    try { await inserter.InsertAsync(target!, partialChunk, CancellationToken.None); }
-                    catch (IndeterminateTextInsertionException) { indeterminate = true; }
+                    bool inserted = await inserter.InsertAsync(target!, partialChunk, CancellationToken.None);
                     await Task.Delay(180);
-                    Require(indeterminate && focusSwitched && replacementBox.IsKeyboardFocused,
-                        "partial Unicode dispatch was not distinguished from pre-dispatch refusal");
-                    Require(box.Text == beforePartial + partialChunk[..8] && replacementBox.Text == "replacement ",
-                        $"paced Unicode partial host readback mismatch; original delta={box.Text.Length - beforePartial.Length}; " +
-                        $"replacement delta={replacementBox.Text.Length - "replacement ".Length}; " +
-                        $"original remains prefix={box.Text.StartsWith(beforePartial, StringComparison.Ordinal)}");
-                    Console.WriteLine("PRODUCTION_INSERTER_PARTIAL_UNICODE_FOCUS_LOSS_TYPED=PASS");
+                    Require(!inserted && !focusSwitched && box.IsKeyboardFocused && !replacementBox.IsKeyboardFocused,
+                        "unsupported Unicode was not refused before the different-window focus-switch handler fired");
+                    Require(box.Text == beforePartial && replacementBox.Text == "replacement ",
+                        $"different-window pre-dispatch refusal changed host text; original delta={box.Text.Length - beforePartial.Length}; " +
+                        $"replacement delta={replacementBox.Text.Length - "replacement ".Length}");
+                    Console.WriteLine("PRODUCTION_INSERTER_UNICODE_DIFFERENT_WINDOW_SWITCH_REFUSED_BEFORE_DISPATCH=PASS");
                 }
                 finally
                 {
@@ -433,18 +491,80 @@ internal static class Program
                 box.TextChanged += changeToSiblingAfterFirstBatch;
                 try
                 {
-                    bool indeterminate = false;
-                    try { await inserter.InsertAsync(sameWindowTarget!, partialChunk, CancellationToken.None); }
-                    catch (IndeterminateTextInsertionException) { indeterminate = true; }
+                    Require(box.IsKeyboardFocused && !siblingBox.IsKeyboardFocused,
+                        "same-window pre-dispatch fixture is not focused on the proven original target");
+                    bool inserted = await inserter.InsertAsync(sameWindowTarget!, partialChunk, CancellationToken.None);
                     await Task.Delay(180);
-                    Require(indeterminate && siblingFocused && siblingBox.IsKeyboardFocused,
-                        "same-window partial Unicode dispatch was not distinguished");
-                    Require(box.Text == beforeSibling + partialChunk[..8] && siblingBox.Text == "sibling ",
-                        $"same-window Unicode partial readback mismatch; original delta={box.Text.Length - beforeSibling.Length}; " +
+                    Require(!inserted && !siblingFocused && box.IsKeyboardFocused && !siblingBox.IsKeyboardFocused,
+                        "unsupported Unicode was not refused before the same-window focus-switch handler fired");
+                    Require(box.Text == beforeSibling && siblingBox.Text == "sibling ",
+                        $"same-window pre-dispatch refusal changed host text; original delta={box.Text.Length - beforeSibling.Length}; " +
                         $"sibling delta={siblingBox.Text.Length - "sibling ".Length}");
-                    Console.WriteLine("PRODUCTION_INSERTER_PARTIAL_UNICODE_SIBLING_FOCUS_LOSS_TYPED=PASS");
+                    Console.WriteLine("PRODUCTION_INSERTER_UNICODE_SAME_WINDOW_SIBLING_SWITCH_REFUSED_BEFORE_DISPATCH=PASS");
                 }
                 finally { box.TextChanged -= changeToSiblingAfterFirstBatch; }
+                var emojiPopup = new Cotabby.App.Emoji.EmojiPopupWindow();
+                using var emojiHook = new FixtureKeyboardHook();
+                var emojiPicker = new Cotabby.App.Emoji.EmojiPickerController(
+                    emojiHook, tracker, inserter, emojiPopup, app.Dispatcher,
+                    NullLogger<Cotabby.App.Emoji.EmojiPickerController>.Instance);
+                host.RegisterEmojiPicker(emojiPicker); // Exercises the production admission wiring.
+                bool enabledBeforeEmoji = host.Settings.Enabled;
+                bool emojiEnabledBefore = host.Settings.EmojiPickerEnabled;
+                try
+                {
+                    host.Settings.Enabled = true;
+                    host.Settings.EmojiPickerEnabled = true;
+                    foreach (string unsupported in new[] { "uia", "unicode" })
+                    {
+                        host.Settings.InsertionStrategy = unsupported;
+                        host.ApplyRuntimeSettings();
+                        const string queryText = ":smile:";
+                        box.Text = queryText;
+                        fixture.Activate();
+                        box.Focus();
+                        box.CaretIndex = box.Text.Length;
+                        await Task.Delay(120);
+                        Require(box.IsKeyboardFocused, "emoji admission fixture has no keyboard focus");
+                        var emojiTarget = await Task.Run(() => tracker.Refresh());
+                        Require(emojiTarget is { IsCredentialField: false, StableFieldIdentity: not null },
+                            "emoji admission fixture has no proven noncredential identity");
+                        await Task.Run(() =>
+                        {
+                            foreach (char c in ":smile") emojiHook.Emit(c);
+                        });
+                        await Task.Delay(80);
+                        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var state = (EmojiTriggerStateMachine)typeof(Cotabby.App.Emoji.EmojiPickerController)
+                            .GetField("_state", flags)!.GetValue(emojiPicker)!;
+                        var matches = (List<EmojiEntry>)typeof(Cotabby.App.Emoji.EmojiPickerController)
+                            .GetField("_matches", flags)!.GetValue(emojiPicker)!;
+                        Require(state.IsActive && state.Query == "smile" && matches.Count > 0 && box.IsKeyboardFocused,
+                            "emoji refusal proof did not arm a real nonempty query and match");
+                        EmojiEntry selectedEmoji = matches[0];
+                        var commitKey = await Task.Run(() => emojiHook.Emit(':'));
+                        await Task.Delay(300);
+                        Require(state.LastCommittedQuery == "smile" && state.QueryAtCommitLength == queryText.Length,
+                            "emoji refusal proof did not reach a nonzero deletion-capable commit state");
+                        Require(box.Text == queryText,
+                            $"unsupported {unsupported} emoji commit erased or replaced its query; length={box.Text.Length}");
+                        Require(!commitKey.Suppress, $"unsupported {unsupported} emoji commit suppressed the host key");
+                        // Bypass the hook-side gate to prove admission is checked
+                        // again immediately before the asynchronous destructive step.
+                        var commitMethod = typeof(Cotabby.App.Emoji.EmojiPickerController).GetMethod("CommitAsync", flags)!;
+                        await Task.Run(async () => await (Task)commitMethod.Invoke(emojiPicker, new object[] { selectedEmoji })!);
+                        await Task.Delay(120);
+                        Require(box.Text == queryText,
+                            $"unsupported {unsupported} direct emoji commit bypassed deletion admission");
+                    }
+                    Console.WriteLine("EMOJI_UNSUPPORTED_STRATEGY_QUERY_AND_HOST_KEY_PRESERVED=PASS");
+                }
+                finally
+                {
+                    host.Settings.Enabled = enabledBeforeEmoji;
+                    host.Settings.EmojiPickerEnabled = emojiEnabledBefore;
+                    host.ApplyRuntimeSettings();
+                }
                 fixture.Close();
                 overlay.Close();
                 result = 0;
@@ -479,8 +599,38 @@ internal static class Program
     [DllImport("user32.dll")]
     private static extern uint GetClipboardSequenceNumber();
 
+    private static void RequireInsertionStrategySurvivesReload(AppHost host, string expected)
+    {
+        var reloadedSettings = host.SettingsStore.Load();
+        var restartedInserter = new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance)
+        {
+            InsertionStrategy = reloadedSettings.InsertionStrategy,
+        };
+        Require(reloadedSettings.InsertionStrategy == expected
+            && restartedInserter.InsertionStrategy == expected,
+            $"saved {expected} strategy did not configure a fresh inserter after reload");
+    }
+
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private sealed class FixtureKeyboardHook : IKeyboardHook
+    {
+        public event EventHandler<Cotabby.Core.Input.KeyEventArgs>? KeyEvent;
+        public void Start() { }
+        public void Stop() { }
+        public void Dispose() => KeyEvent = null;
+        public Cotabby.Core.Input.KeyEventArgs Emit(char c)
+        {
+            var args = new Cotabby.Core.Input.KeyEventArgs(new KeyboardEvent
+            {
+                Kind = KeyKind.Character, Character = c,
+                HasNonShiftModifier = false, IsKeyDown = true,
+            });
+            KeyEvent?.Invoke(this, args);
+            return args;
+        }
     }
 }

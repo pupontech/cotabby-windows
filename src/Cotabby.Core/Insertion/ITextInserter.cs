@@ -16,10 +16,11 @@ public interface ITextInserter
     /// <remarks>
     /// Implementations must be reentrancy-safe: a Tab-driven acceptance may fire
     /// while a previous insertion is still in-flight if the user is rapid-fire.
-    /// Native dispatch can fail after partial input. False is not a guarantee
-    /// of zero host mutation; callers must not blindly replay the text. When an
-    /// implementation knows one or more native Unicode events were dispatched
-    /// before a later dispatch batch failed, it must throw
+    /// Native dispatch can fail after partial input, including when one
+    /// SendInput call reports fewer events than its submitted single batch.
+    /// False is not a guarantee of zero host mutation; callers must not blindly
+    /// replay the text. When an implementation knows one or more native Unicode
+    /// events were dispatched before an incomplete or failed dispatch, it must throw
     /// <see cref="IndeterminateTextInsertionException"/> so acceptance callers
     /// can retire that offer instead of retrying potentially duplicated text.
     /// </remarks>

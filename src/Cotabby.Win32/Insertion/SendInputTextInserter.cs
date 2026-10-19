@@ -78,11 +78,7 @@ public sealed class SendInputTextInserter : ITextInserter
                 {
                     ct.ThrowIfCancellationRequested();
                     if (!TargetStillFocused(target)) return false;
-                    // Explicit Unicode bounds event bursts even below Auto's
-                    // legacy cutoff; Auto retains its existing behavior exactly.
-                    return text.Length > 8 && string.Equals(strategySnapshot, "unicode", StringComparison.OrdinalIgnoreCase)
-                        ? SendPacedUnicodeString(target, text, ct)
-                        : SendUnicodeString(text);
+                    return SendUnicodeString(text);
                 }, ct).ConfigureAwait(false);
             }
 
@@ -238,48 +234,6 @@ public sealed class SendInputTextInserter : ITextInserter
     /// KEYEVENTF_UNICODE down/up pairs. UTF-16 code units go through as-is,
     /// so surrogate pairs (emoji) arrive intact.
     /// </summary>
-    private bool SendPacedUnicodeString(FocusedField target, string text, CancellationToken ct)
-    {
-        // UIA focus publication can lag a same-process foreground-window change.
-        // Pin the window that owned the validated first dispatch, not just its PID.
-        nint ownerWindow = GetForegroundWindow();
-        if (ownerWindow == nint.Zero) return false;
-        // Keep the native thread fixed from BlockInput(true) through cleanup.
-        // Without input blocking, separate bursts could interleave physical keys.
-        if (!BlockInput(true))
-        {
-            _logger.LogWarning("Paced Unicode insertion refused: input isolation unavailable.");
-            return false;
-        }
-        bool dispatched = false;
-        try
-        {
-            foreach (string batch in UnicodeInputBatcher.Split(text))
-            {
-                // After irreversible dispatch do not cancel mid-text or retry.
-                if (!dispatched) ct.ThrowIfCancellationRequested();
-                if (GetForegroundWindow() != ownerWindow
-                    || !TargetStillFocused(target)
-                    || GetForegroundWindow() != ownerWindow
-                    || !SendUnicodeString(batch))
-                {
-                    if (dispatched) throw new IndeterminateTextInsertionException();
-                    return false;
-                }
-                dispatched = true;
-                Thread.Sleep(15); // Allow the destination to drain each small event burst.
-            }
-            return true;
-        }
-        catch (Exception) when (dispatched)
-        {
-            // Retire the caller's offer rather than presenting the whole chunk
-            // again after any prefix may already have reached the host.
-            throw new IndeterminateTextInsertionException();
-        }
-        finally { BlockInput(false); }
-    }
-
     private static bool SendUnicodeString(string text)
     {
         var inputs = new INPUT[text.Length * 2];

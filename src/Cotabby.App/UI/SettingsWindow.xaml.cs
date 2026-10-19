@@ -1068,19 +1068,15 @@ public partial class SettingsWindow : Window
             "debug" => 1, "warning" => 2, "error" => 3, _ => 0,
         };
 
-        if (string.Equals(_host.Settings.InsertionStrategy, "uia", StringComparison.OrdinalIgnoreCase))
+        string? savedStrategy = _host.Settings.InsertionStrategy?.ToLowerInvariant();
+        if (savedStrategy is "unicode" or "uia")
         {
             InsertionStrategyCombo.SelectedIndex = -1;
-            InsertionStrategyExplanation.Text = "The saved 'uia' strategy is unsupported. Insertions are refused without clipboard fallback. Choose a supported strategy to resume.";
+            InsertionStrategyExplanation.Text = $"The saved '{savedStrategy}' strategy is unsupported and deferred. Non-empty insertions are refused without clipboard fallback. Choose Auto or Clipboard to resume.";
         }
         else
         {
-            string strategy = _host.Settings.InsertionStrategy?.ToLowerInvariant() switch
-            {
-                "unicode" => "unicode",
-                "clipboard" => "clipboard",
-                _ => "auto",
-            };
+            string strategy = savedStrategy == "clipboard" ? "clipboard" : "auto";
             InsertionStrategyCombo.SelectedItem = InsertionStrategyCombo.Items
                 .Cast<ComboBoxItem>()
                 .Single(item => string.Equals(item.Tag as string, strategy, StringComparison.Ordinal));
@@ -1090,15 +1086,15 @@ public partial class SettingsWindow : Window
 
     private static string InsertionStrategyExplanationFor(string strategy) => strategy switch
     {
-        "unicode" => "Sends all text through Unicode SendInput and never reads or writes the clipboard. Some hosts may drop long injected text; verify the result in your app.",
         "clipboard" => "Temporarily puts text on the clipboard to paste, then restores saved formats only while Cotabby still owns it. Clipboard managers may observe the temporary text.",
-        _ => "Up to 24 UTF-16 code units with no LF use Unicode SendInput; all other text uses clipboard paste. A carriage return alone does not change this rule.",
+        _ => "Auto preserves the existing heuristic: up to 24 UTF-16 code units with no LF use one Unicode SendInput batch; all other text uses clipboard paste. Short Unicode batches may still be dropped by some hosts. A carriage return alone does not change the rule.",
     };
 
     private void OnInsertionStrategyChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_loaded || InsertionStrategyCombo.SelectedItem is not ComboBoxItem item
             || item.Tag is not string strategy) return;
+        if (string.Equals(_host.Settings.InsertionStrategy, strategy, StringComparison.Ordinal)) return;
         _host.Settings.InsertionStrategy = strategy;
         InsertionStrategyExplanation.Text = InsertionStrategyExplanationFor(strategy);
         _host.PersistSettings();

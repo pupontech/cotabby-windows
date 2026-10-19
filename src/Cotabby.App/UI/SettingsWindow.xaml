@@ -814,7 +814,6 @@
                             <ComboBox x:Name="InsertionStrategyCombo" Style="{StaticResource Combo}"
                                       Margin="0,8,0,8" SelectionChanged="OnInsertionStrategyChanged">
                                 <ComboBoxItem Content="Automatic (recommended)" Tag="auto" />
-                                <ComboBoxItem Content="Unicode SendInput" Tag="unicode" />
                                 <ComboBoxItem Content="Clipboard paste" Tag="clipboard" />
                             </ComboBox>
                             <TextBlock x:Name="InsertionStrategyExplanation" Style="{StaticResource Caption}"
