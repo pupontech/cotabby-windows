@@ -240,6 +240,10 @@ public sealed class SendInputTextInserter : ITextInserter
     /// </summary>
     private bool SendPacedUnicodeString(FocusedField target, string text, CancellationToken ct)
     {
+        // UIA focus publication can lag a same-process foreground-window change.
+        // Pin the window that owned the validated first dispatch, not just its PID.
+        nint ownerWindow = GetForegroundWindow();
+        if (ownerWindow == nint.Zero) return false;
         // Keep the native thread fixed from BlockInput(true) through cleanup.
         // Without input blocking, separate bursts could interleave physical keys.
         if (!BlockInput(true))
@@ -254,7 +258,10 @@ public sealed class SendInputTextInserter : ITextInserter
             {
                 // After irreversible dispatch do not cancel mid-text or retry.
                 if (!dispatched) ct.ThrowIfCancellationRequested();
-                if (!TargetStillFocused(target) || !SendUnicodeString(batch))
+                if (GetForegroundWindow() != ownerWindow
+                    || !TargetStillFocused(target)
+                    || GetForegroundWindow() != ownerWindow
+                    || !SendUnicodeString(batch))
                 {
                     if (dispatched) throw new IndeterminateTextInsertionException();
                     return false;
