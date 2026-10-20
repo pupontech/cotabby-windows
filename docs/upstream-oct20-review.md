@@ -2,8 +2,8 @@
 
 ## Scope and verdict
 
-Reviewed the 13 PRs opened in FuJacob/cotabby since October 5: #864, #866–#877
-(excluding nonexistent #865 in this PR set). Main remains
+Reviewed the 13 PRs opened in FuJacob/cotabby since October 5: #864 and #866–#877.
+Main remains
 `8cdbea2d2619b0f89a73d46eb0bb856504d07343`. Windows baseline is
 `d10b9c2` (v0.6.0 main). Other Windows feature PRs are not included.
 
@@ -190,6 +190,15 @@ no DOM parity or universal search detection is claimed.
 - Upstream #864: catalog validation and five Python tests passed. An initial
   unittest discovery in scripts/ found zero tests; the correct scripts/tests/
   command was then run. Zero discovery is not counted as coverage.
+- First Windows run `39421047416` passed the new real UIA search fixture and
+  Core/Win32 tests, then caught the older credential smoke's stale expectation
+  that `Search email` was an available prose field. Its zero-read result was
+  the new intended policy, not a credential bypass. The fixture now has a
+  separate search-reject outcome: no snapshot, zero reads, stable focused
+  process/metadata and a direct ValuePattern eligibility/read-spy control.
+  Credential cases still require their explicit non-null credential flags.
+- Optional Gemini consultation was unavailable because Antigravity was not
+  authenticated; no independent Gemini coverage is claimed.
 - Windows CI must compile/test the exact candidate, run the production UIA/
   insertion/settings/hook fixtures, publish self-contained x64, extract the ZIP,
   verify its member manifest and load the CPU native DLL. BUILD-INFO.txt records
