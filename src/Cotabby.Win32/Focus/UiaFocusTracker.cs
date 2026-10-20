@@ -178,6 +178,11 @@ public sealed class UiaFocusTracker : IFocusTracker
                 return true;
             }
 
+            // A search query belongs to the host, not the completion engine. Like
+            // other unsupported fields, publish no snapshot and never read its value.
+            if (SearchFieldDetector.IsSearchField(controlType, Labels(name, helpText, labeledByName), automationId))
+                return false;
+
             if (!IsEditableField(element, info)) return false;
 
             // Neutral metadata: the payload read below is the single one allowed

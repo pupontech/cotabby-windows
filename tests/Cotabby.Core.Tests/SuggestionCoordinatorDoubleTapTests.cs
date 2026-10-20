@@ -30,6 +30,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
     [InlineData("credential")]
     [InlineData("other-field")]
     [InlineData("other-process")]
+    [InlineData("unsupported-field")]
     public async Task ChangedFocusBeforeFirstChunkDoesNotPresentPriorFieldSuggestion(string change)
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true, showSuggestion: false);
@@ -37,6 +38,7 @@ public sealed class SuggestionCoordinatorDoubleTapTests
         await rig.Engine.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         if (change == "credential") rig.Focus.MakeCredentialField();
         else if (change == "other-field") rig.Focus.MoveToAnotherField();
+        else if (change == "unsupported-field") rig.Focus.ClearField();
         else rig.Focus.MoveToAnotherProcess();
         rig.Engine.Release.TrySetResult();
         await rig.Ui.WaitForPendingAtLeastAsync(1);

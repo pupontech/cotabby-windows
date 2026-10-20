@@ -149,6 +149,25 @@ internal static class Program
                 Require(cancellation.IsCancellationRequested && box.Text == expected,
                     "cancellation case did not observe dispatched host text");
                 Console.WriteLine("PRODUCTION_INSERTER_POST_DISPATCH_CANCELLATION_ACCOUNTED=PASS");
+                // Prove metadata policy through a real UIA provider. A positive
+                // ordinary-field snapshot immediately before/after rules out a
+                // generic focus/UIA outage being mistaken for search suppression.
+                var searchBox = new TextBox { Text = "dummy query", FontSize = 18 };
+                System.Windows.Automation.AutomationProperties.SetName(searchBox, "Search mail");
+                System.Windows.Automation.AutomationProperties.SetAutomationId(searchBox, "ms-searchux-input");
+                var searchWindow = new Window { Content = searchBox, Width = 400, Height = 160 };
+                searchWindow.Show();
+                searchWindow.Activate();
+                searchBox.Focus();
+                await Task.Delay(200);
+                Require(searchBox.IsKeyboardFocused, "search fixture did not receive focus");
+                Require(await Task.Run(() => tracker.Refresh()) is null, "search query produced a completion snapshot");
+                System.Windows.Automation.AutomationProperties.SetName(searchBox, "Research notes");
+                System.Windows.Automation.AutomationProperties.SetAutomationId(searchBox, "research-notes");
+                Require(await Task.Run(() => tracker.Refresh()) is { IsCredentialField: false, Text: "dummy query" },
+                    "ordinary writing fixture was incorrectly suppressed or UIA unavailable");
+                Console.WriteLine("SEARCH_UIA_METADATA_SUPPRESSION_AND_ORDINARY_FIELD_CONTROL=PASS");
+                searchWindow.Close();
                 fixture.Close();
                 overlay.Close();
                 result = 0;

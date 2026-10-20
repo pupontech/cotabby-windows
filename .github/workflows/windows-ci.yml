@@ -113,11 +113,17 @@ jobs:
           Copy-Item docs/upstream-credential-fields.md (Join-Path $root FEATURE-NOTES.md)
           Copy-Item docs/upstream-double-tap.md (Join-Path $root DOUBLETAP-NOTES.md)
           Copy-Item docs/tabtype-phase1.md (Join-Path $root TABTYPE-PHASE1-NOTES.md)
+          Copy-Item docs/upstream-oct20-review.md (Join-Path $root UPSTREAM-REVIEW.md)
           @(
             'Cotabby Windows feature test build'
             'Extract the complete ZIP into a NEW folder. Run Cotabby.exe as a standard user.'
             'Keep runtimes/win-x64 beside the executable. No .NET installation is required.'
             'This build uses your existing Cotabby settings and model cache.'
+            'October upstream review: search-field suppression and unsupported-focus late-result fix only. Read UPSTREAM-REVIEW.md for all 13 PR dispositions.'
+            'Search test: Teams/app Search, Find and Filter boxes should receive no suggestions. Research notes and ordinary writing should still complete.'
+            'Browser address bars with search labels are intentionally suppressed. Unlabeled/localized fields vary; no complete DOM parity is claimed.'
+            'Late-result test: start typing in a writing field, then switch immediately to a search box. The prior completion must not appear there.'
+            'MLX, rewriting, memory, answer cards, localization and the latency bundle are NOT included. No Windows speedup is claimed.'
             'Test tabby-2-nano first, then tabby-2-plus when memory permits.'
             'Try single-line and multi-line completion, the longest length preset, and a mid-line caret.'
             'Open Settings > Performance. Wait at least two samples; unknown GPU fields show a dash.'
