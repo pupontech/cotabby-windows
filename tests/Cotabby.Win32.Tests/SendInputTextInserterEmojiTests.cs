@@ -14,15 +14,21 @@ public sealed class SendInputTextInserterEmojiTests
     [Fact]
     public void ReplacementValidatorConfiguresTheSameAutomationClientToFiniteTimeouts()
     {
-        using var validator = new BoundedUiaReplacementFocusValidator();
-        var client = (IUIAutomation2)typeof(BoundedUiaReplacementFocusValidator)
-            .GetField("_automation", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(validator)!;
+        var timeouts = RunOnStaThread(() =>
+        {
+            Assert.Equal(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
+            using var validator = new BoundedUiaReplacementFocusValidator();
+            var client = (IUIAutomation2)typeof(BoundedUiaReplacementFocusValidator)
+                .GetField("_automation", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(validator)!;
 
-        Assert.Equal(0, client.get_TransactionTimeout(out uint transactionTimeout));
-        Assert.Equal(BoundedUiaReplacementFocusValidator.TransactionTimeoutMilliseconds, transactionTimeout);
-        Assert.Equal(0, client.get_ConnectionTimeout(out uint connectionTimeout));
-        Assert.Equal(BoundedUiaReplacementFocusValidator.TransactionTimeoutMilliseconds, connectionTimeout);
+            Assert.Equal(0, client.get_TransactionTimeout(out uint transactionTimeout));
+            Assert.Equal(0, client.get_ConnectionTimeout(out uint connectionTimeout));
+            return (transactionTimeout, connectionTimeout);
+        });
+
+        Assert.Equal(BoundedUiaReplacementFocusValidator.TransactionTimeoutMilliseconds, timeouts.transactionTimeout);
+        Assert.Equal(BoundedUiaReplacementFocusValidator.TransactionTimeoutMilliseconds, timeouts.connectionTimeout);
     }
 
     [Fact]
@@ -124,6 +130,25 @@ public sealed class SendInputTextInserterEmojiTests
 
         Assert.True(result.IsComplete);
         Assert.Equal(TextReplacementStatus.Completed, result.Status);
+    }
+
+    private static T RunOnStaThread<T>(Func<T> action)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { completion.SetResult(action()); }
+            catch (Exception exception) { completion.SetException(exception); }
+        })
+        {
+            IsBackground = true,
+            Name = "UIA Win32 test STA",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromSeconds(10)))
+            throw new TimeoutException("UI Automation timeout configuration did not return on the STA thread.");
+        return completion.Task.GetAwaiter().GetResult();
     }
 
     private static SendInputTextInserter CreateInserter(
