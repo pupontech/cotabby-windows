@@ -15,11 +15,18 @@ public interface ITextInserter
     /// <paramref name="target"/> with <paramref name="text"/>.
     /// </summary>
     /// <remarks>
-    /// Implementations must fail closed unless ownership is proven, serialize
-    /// input blocking and injection on one native thread, and perform no await
-    /// between the final ownership check and dispatching the replacement batch.
+    /// Implementations must fail closed unless strong field ownership, the
+    /// expected trailing text and caret are proven; serialize input blocking and
+    /// injection on one native thread; and expose partial native dispatches.
+    /// A partial result is not atomic and may already have mutated the field.
     /// </remarks>
-    Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct);
+    Task<TextReplacementResult> ReplaceTextAsync(
+        FocusedField target,
+        int charactersToReplace,
+        string text,
+        string expectedTail,
+        int expectedCaretOffset,
+        CancellationToken ct);
 
     /// <summary>
     /// Insert <paramref name="text"/> at the caret of <paramref name="target"/>.

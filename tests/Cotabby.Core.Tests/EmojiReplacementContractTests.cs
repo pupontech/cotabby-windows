@@ -10,9 +10,13 @@ public sealed class EmojiReplacementContractTests
         var method = typeof(ITextInserter).GetMethod("ReplaceTextAsync");
 
         Assert.NotNull(method);
-        Assert.Equal(typeof(Task<bool>), method!.ReturnType);
+        Assert.Equal("TextReplacementResult", method!.ReturnType.GetGenericArguments()[0].Name);
         Assert.Equal(
-            new[] { typeof(Cotabby.Core.Focus.FocusedField), typeof(int), typeof(string), typeof(CancellationToken) },
+            new[]
+            {
+                typeof(Cotabby.Core.Focus.FocusedField), typeof(int), typeof(string), typeof(string), typeof(int),
+                typeof(CancellationToken),
+            },
             method.GetParameters().Select(parameter => parameter.ParameterType));
     }
 }

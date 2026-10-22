@@ -12,8 +12,9 @@ namespace Cotabby.App.Emoji;
 /// Wires keyboard events into the emoji trigger state machine and drives the
 /// popup window + final insertion. Mirrors the macOS port's
 /// <c>EmojiPickerController</c>: observes the global keyboard stream
-/// alongside the suggestion coordinator, owns no focus/UIA work of its own,
-/// only consumes events when a trigger is active.
+/// alongside the suggestion coordinator. The low-level hook path consumes an
+/// atomically published focus snapshot; commit-time refresh and insertion checks
+/// run asynchronously off the hook callback.
 /// </summary>
 /// <remarks>
 /// Two notable Windows constraints vs the macOS port:
@@ -71,11 +72,12 @@ public sealed class EmojiPickerController : IDisposable
         var input = args.Event;
         bool refreshFocus = EmojiFocusPolicy.RequiresFreshFocus(input);
 
-        // UIA is synchronous on the low-level hook callback; only events that
-        // can change emoji query text need a fresh ownership read.
+        // The low-level keyboard callback must never perform synchronous UIA.
+        // Current is an atomically published snapshot; the inserter performs a
+        // bounded, strong-identity/text/caret check before any mutation.
         if (!_state.IsActive && refreshFocus && input.Character == ':')
         {
-            _triggerField = _focus.Refresh();
+            _triggerField = _focus.Current;
             if (!EmojiFocusPolicy.IsUsableTarget(_triggerField))
             {
                 _triggerField = null;
@@ -85,17 +87,13 @@ public sealed class EmojiPickerController : IDisposable
         }
         else if (_state.IsActive && refreshFocus)
         {
-            var liveField = _focus.Refresh();
+            var liveField = _focus.Current;
             if (!EmojiFocusPolicy.SameUsableTarget(_triggerField, liveField))
             {
                 _state.Reset();
                 ClearPopup();
                 return;
             }
-
-            // Retain the latest snapshot for caret geometry and commit, but only
-            // after process + stable field identity have proved ownership.
-            _triggerField = liveField;
         }
 
         var outcome = _state.Apply(args.Event);
@@ -125,8 +123,8 @@ public sealed class EmojiPickerController : IDisposable
     {
         _matches = EmojiMatcher.Search(_state.Query, max: 6);
         _selected = 0;
-        // OnKeyEvent has already revalidated and refreshed this field before
-        // every active query update. Never resurrect a stale target here.
+        // The published current snapshot must still belong to the trigger target.
+        // Replacement uses the original trigger caret and refreshes asynchronously.
         var anchor = _triggerField?.CaretRect ?? new ScreenRect(100, 100, 1, 20);
         _dispatcher.BeginInvoke(() => _popup.Show(_matches, _state.Query, anchor, _selected));
     }
@@ -143,14 +141,43 @@ public sealed class EmojiPickerController : IDisposable
     {
         try
         {
-            // Focus can change between the hook event and this asynchronous
-            // commit. The inserter repeats ownership validation inside the
-            // input-blocked replacement transaction immediately before mutation.
-            if (!EmojiFocusPolicy.SameUsableTarget(target, _focus.Refresh())) return;
-
             int eat = _state.QueryAtCommitLength;
-            if (!await _inserter.ReplaceTextAsync(target, eat, entry.Glyph, CancellationToken.None))
+            string expectedTail = string.Concat(":", _state.LastCommittedQuery, ":");
+            string tailBeforeTrailingColon = expectedTail[..^1];
+            if (target.CaretOffset < 0
+                || target.CaretOffset > target.Text.Length
+                || target.CaretOffset > int.MaxValue - expectedTail.Length)
                 return;
+
+            int expectedCaretOffset = target.CaretOffset + expectedTail.Length;
+            FocusedField? liveField = null;
+
+            // Refresh off the low-level hook stack. The host may not have
+            // processed the triggering colon yet, so briefly wait for the exact
+            // tail at the original trigger caret; any same-field edit or focus
+            // change aborts.
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                liveField = await Task.Run(_focus.Refresh).ConfigureAwait(false);
+                if (!EmojiFocusPolicy.SameUsableTarget(target, liveField)) return;
+                if (EmojiFocusPolicy.MatchesExpectedTailAtTriggerCaret(target, liveField, expectedTail)) break;
+                if (!EmojiFocusPolicy.MatchesExpectedTailAtTriggerCaret(
+                    target, liveField, tailBeforeTrailingColon)) return;
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+
+            if (liveField is null
+                || !EmojiFocusPolicy.MatchesExpectedTailAtTriggerCaret(target, liveField, expectedTail)) return;
+            var result = await _inserter.ReplaceTextAsync(
+                target, eat, entry.Glyph, expectedTail, expectedCaretOffset, CancellationToken.None);
+            if (result.Status == TextReplacementStatus.Partial)
+            {
+                _logger.LogWarning(
+                    "Emoji replacement partially dispatched ({Inserted}/{Requested} input events; key release recovered={Recovered}).",
+                    result.InsertedInputCount, result.RequestedInputCount, result.KeyReleaseRecovered);
+                return;
+            }
+            if (!result.IsComplete) return;
 
             // Deliberately logs the catalog name, not the typed query: the query
             // is user text and is not written to the local log.

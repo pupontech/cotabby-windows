@@ -37,7 +37,7 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// <summary>Opt-in process defaults and transient neutral-field back-off.</summary>
     public bool SmarterFieldSuppression { get; set; }
 
-    public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
+    public FocusedField? Current => Volatile.Read(ref _fakeField) ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
 
@@ -51,7 +51,7 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// </summary>
     public void SetFakeFieldForTesting(FocusedField? fake)
     {
-        _fakeField = fake;
+        Volatile.Write(ref _fakeField, fake);
         FocusChanged?.Invoke(this, fake);
     }
 
@@ -70,7 +70,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // Seed the current snapshot so consumers calling Current right after
             // Start don't see null until the first focus change.
             TryCaptureFocused(out var initial);
-            _current = initial;
+            Volatile.Write(ref _current, initial);
         }
     }
 
@@ -86,16 +86,16 @@ public sealed class UiaFocusTracker : IFocusTracker
                 catch (Exception ex) { _logger.LogWarning(ex, "RemoveAutomationFocusChangedEventHandler threw."); }
                 _handler = null;
             }
-            _current = null;
+            Volatile.Write(ref _current, null);
             _logger.LogInformation("UIA focus tracker stopped.");
         }
     }
 
     public FocusedField? Refresh()
     {
-        if (_fakeField is not null) return _fakeField;
+        if (Volatile.Read(ref _fakeField) is { } fake) return fake;
         TryCaptureFocused(out var snap);
-        _current = snap;
+        Volatile.Write(ref _current, snap);
         return snap;
     }
 
@@ -118,7 +118,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             if (snap is null)
             {
                 AdvanceFocusPartition(0, 0, 0, 0, 0);
-                _current = null;
+                Volatile.Write(ref _current, null);
                 FocusChanged?.Invoke(this, null);
                 return;
             }
@@ -127,7 +127,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // We don't have a stable element identity through ElementHandle since
             // UIA's RuntimeId is a managed int[] and equality isn't trivial across
             // events. Treat every focus event as a state change — cheap enough.
-            _current = snap;
+            Volatile.Write(ref _current, snap);
             AdvanceFocusPartition(snap.ProcessId, snap.FieldRect.X, snap.FieldRect.Y,
                 snap.FieldRect.Width, snap.FieldRect.Height);
             FocusChanged?.Invoke(this, snap);

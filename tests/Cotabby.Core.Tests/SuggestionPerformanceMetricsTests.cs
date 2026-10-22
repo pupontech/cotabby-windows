@@ -332,7 +332,8 @@ public sealed class SuggestionPerformanceMetricsTests
             return Task.FromResult(true);
         }
 
-        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct) =>
-            Task.FromResult(false);
+        public Task<TextReplacementResult> ReplaceTextAsync(
+            FocusedField target, int charactersToReplace, string text, string expectedTail, int expectedCaretOffset, CancellationToken ct) =>
+            Task.FromResult(TextReplacementResult.Rejected);
     }
 }
