@@ -9,20 +9,30 @@ namespace Cotabby.Interop.Contracts.Tests;
 public sealed class UiAutomationContractTests
 {
     [Fact]
-    public void Automation2MethodsMatchTheWindowsSdkSlotOrderAndInterfaceIdentity()
+    public void Automation2MethodsIncludeTheWindowsSdkBaseSlotsBeforeItsOwnMethods()
     {
         Assert.Equal("34723aff-0c9d-49d0-9896-7ab52df8cd8a", typeof(IUIAutomation2).GUID.ToString());
-        Assert.Equal(
-            new[]
-            {
-                "get_AutoSetFocus",
-                "put_AutoSetFocus",
-                "get_ConnectionTimeout",
-                "put_ConnectionTimeout",
-                "get_TransactionTimeout",
-                "put_TransactionTimeout",
-            },
-            DeclaredMethodNames(typeof(IUIAutomation2)));
+        var baseMethods = DeclaredMethodNames(typeof(IUIAutomation));
+        Assert.Equal(55, baseMethods.Length);
+        Assert.Equal("get_ProxyFactoryMapping", baseMethods[45]);
+        var expected = baseMethods.Concat(new[]
+        {
+            "get_AutoSetFocus",
+            "put_AutoSetFocus",
+            "get_ConnectionTimeout",
+            "put_ConnectionTimeout",
+            "get_TransactionTimeout",
+            "put_TransactionTimeout",
+        });
+        var methods = DeclaredMethods(typeof(IUIAutomation2));
+
+        Assert.Equal(expected, methods.Select(method => method.Name));
+        Assert.Equal("GetFocusedElement", methods[5].Name);
+        Assert.Equal("get_AutoSetFocus", methods[55].Name);
+        Assert.Equal("put_TransactionTimeout", methods[60].Name);
+        AssertPreserveSigInt(methods[5]);
+        AssertParameter(methods[5], 0, typeof(IUIAutomationElement).MakeByRefType(), isOut: true,
+            UnmanagedType.Interface);
     }
 
     [Fact]
