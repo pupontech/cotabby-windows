@@ -55,10 +55,12 @@ public static class EmojiFocusPolicy
     {
         if (expected is null
             || string.IsNullOrEmpty(expectedTail)
+            || !expected.CaretOffsetIsProven
             || expected.CaretOffset > int.MaxValue - expectedTail.Length
             || expectedCaretOffset != expected.CaretOffset + expectedTail.Length)
             return false;
 
-        return MatchesExpectedTailAtTriggerCaret(expected, live, expectedTail);
+        return live?.CaretOffsetIsProven == true
+            && MatchesExpectedTailAtTriggerCaret(expected, live, expectedTail);
     }
 }

@@ -3,6 +3,7 @@ using Cotabby.Core.Emoji;
 using Cotabby.Core.Focus;
 using Cotabby.Core.Insertion;
 using Cotabby.Win32.Insertion;
+using Cotabby.Win32.Interop;
 using Microsoft.Extensions.Logging.Abstractions;
 using static Cotabby.Win32.Interop.NativeMethods;
 
@@ -144,6 +145,7 @@ public sealed class SendInputTextInserterEmojiTests
         ProcessName = "fixture",
         Text = text,
         CaretOffset = caretOffset,
+        CaretOffsetIsProven = true,
         CaretRect = ScreenRect.Empty,
         FieldRect = new ScreenRect(10, 20, 200, 24),
         IsSingleLine = true,

@@ -24,6 +24,7 @@ public class SuggestionRequestFactoryTests
     public void PrefixIsTextUpToCaret()
     {
         var f = Field("hello world", caret: 5);
+        Assert.False(f.CaretOffsetIsProven);
         var r = SuggestionRequestFactory.Build(f, "req");
         Assert.Equal("hello", r.Prefix);
         Assert.Equal(" world", r.Suffix);

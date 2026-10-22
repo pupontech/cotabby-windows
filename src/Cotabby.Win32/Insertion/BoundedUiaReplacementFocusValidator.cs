@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Cotabby.Core.Emoji;
 using Cotabby.Core.Focus;
+using Cotabby.Win32.Interop;
 using static Cotabby.Win32.Interop.NativeMethods;
 namespace Cotabby.Win32.Insertion;
 
@@ -41,10 +42,12 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
     private const int CustomControlType = 50025;
 
     private readonly IUIAutomation2 _automation;
+    private readonly Action? _afterContentReadForTesting;
     private Stopwatch? _budget;
 
-    public BoundedUiaReplacementFocusValidator()
+    internal BoundedUiaReplacementFocusValidator(Action? afterContentReadForTesting = null)
     {
+        _afterContentReadForTesting = afterContentReadForTesting;
         var coclass = Activator.CreateInstance(typeof(CUIAutomationClass))
             ?? throw new InvalidOperationException("Could not create the UI Automation client.");
         try
@@ -108,9 +111,11 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
                 || CredentialFieldDetector.IsCredentialField(controlType, labels, automationId, text: null, isPassword))
                 return false;
 
-            string? textBeforeCaret = ReadTextBeforeCaret(current);
-            if (textBeforeCaret is null
-                || CredentialFieldDetector.IsCredentialField(
+            var content = ReadTextBeforeCaret(current);
+            if (content is null) return false;
+            _afterContentReadForTesting?.Invoke();
+            string textBeforeCaret = content.Value.Text;
+            if (CredentialFieldDetector.IsCredentialField(
                     controlType, labels, automationId, textBeforeCaret, isPassword)) return false;
 
             var live = expected with
@@ -120,9 +125,16 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
                 ProcessId = processId,
                 Text = textBeforeCaret,
                 CaretOffset = textBeforeCaret.Length,
+                CaretOffsetIsProven = content.Value.CaretOffsetIsProven,
                 IsSecure = false,
                 IsCredentialField = false,
             };
+
+            // Content reads can take long enough for programmatic focus changes
+            // despite BlockInput. Re-resolve the focused element and prove its
+            // RuntimeId/foreground immediately before the caller dispatches input.
+            if (!FocusStillMatchesExpectedAfterContentRead(expected)) return false;
+
             return EmojiFocusPolicy.MatchesExpectedReplacement(
                 expected, live, expectedTail, expectedCaretOffset);
         }
@@ -138,13 +150,14 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         }
     }
 
-    private string? ReadTextBeforeCaret(IUIAutomationElement element)
+    private (string Text, bool CaretOffsetIsProven)? ReadTextBeforeCaret(IUIAutomationElement element)
     {
         if (ReadProperty<bool>(element, IsTextPatternAvailableProperty))
         {
             object? rawPattern = null;
             IUIAutomationTextRange? document = null;
-            IUIAutomationTextRange[]? selections = null;
+            IUIAutomationTextRangeArray? selections = null;
+            IUIAutomationTextRange? selection = null;
             IUIAutomationTextRange? prefix = null;
             try
             {
@@ -155,8 +168,13 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
                 CheckHResult(pattern.get_DocumentRange(out document));
                 BeforeUiaCall();
                 CheckHResult(pattern.GetSelection(out selections));
-                if (selections is not { Length: > 0 } || selections[0] is null) return null;
-                var selection = selections[0];
+                if (selections is null) return null;
+                BeforeUiaCall();
+                CheckHResult(selections.get_Length(out int selectionCount));
+                if (selectionCount <= 0) return null;
+                BeforeUiaCall();
+                CheckHResult(selections.GetElement(0, out selection));
+                if (selection is null) return null;
                 BeforeUiaCall();
                 CheckHResult(selection.CompareEndpoints(0, selection, 1, out int collapsed));
                 if (collapsed != 0) return null;
@@ -166,12 +184,12 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
                 CheckHResult(prefix.MoveEndpointByRange(1, selection, 0));
                 BeforeUiaCall();
                 CheckHResult(prefix.GetText(MaximumSnapshotCharacters + 1, out string text));
-                return text.Length <= MaximumSnapshotCharacters ? text : null;
+                return text.Length <= MaximumSnapshotCharacters ? (text, true) : null;
             }
             finally
             {
-                if (selections is not null)
-                    foreach (var selection in selections) ReleaseComObject(selection);
+                ReleaseComObject(selection);
+                ReleaseComObject(selections);
                 ReleaseComObject(prefix);
                 ReleaseComObject(document);
                 ReleaseComObject(rawPattern);
@@ -181,9 +199,43 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         if (!ReadProperty<bool>(element, IsValuePatternAvailableProperty)) return null;
         string? value = ReadOptionalString(element, ValueValueProperty);
         if (value is null || value.Length > MaximumSnapshotCharacters) return null;
-        // ValuePattern exposes no caret. UiaFocusTracker uses the end-of-value
-        // fallback for this same case, so only that exact caret can be proven.
-        return value;
+        // ValuePattern exposes no caret, so this payload cannot authorize replacement.
+        return (value, false);
+    }
+
+    private bool FocusStillMatchesExpectedAfterContentRead(FocusedField expected)
+    {
+        IUIAutomationElement? focused = null;
+        try
+        {
+            BeforeUiaCall();
+            CheckHResult(_automation.GetFocusedElement(out focused));
+            if (focused is null) return false;
+
+            int processId = ReadProperty<int>(focused, ProcessIdProperty);
+            bool hasKeyboardFocus = ReadProperty<bool>(focused, HasKeyboardFocusProperty);
+            bool isPassword = ReadProperty<bool>(focused, IsPasswordProperty);
+            if (processId != expected.ProcessId || !hasKeyboardFocus || isPassword) return false;
+
+            BeforeUiaCall();
+            CheckHResult(focused.GetRuntimeId(out int[] runtimeId));
+            if (runtimeId is not { Length: > 0 }) return false;
+
+            string identity = string.Join('.', runtimeId);
+            if (!string.Equals(identity, expected.StableFieldIdentity, StringComparison.Ordinal)) return false;
+
+            IntPtr foreground = GetForegroundWindow();
+            GetWindowThreadProcessId(foreground, out uint foregroundProcessId);
+            return foreground != IntPtr.Zero && foregroundProcessId == (uint)expected.ProcessId;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        finally
+        {
+            ReleaseComObject(focused);
+        }
     }
 
     private T ReadProperty<T>(IUIAutomationElement element, int propertyId)
@@ -228,130 +280,4 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
     }
 
     public void Dispose() => ReleaseComObject(_automation);
-}
-
-[ComImport, Guid("e22ad333-b25f-460c-83d0-0581107395c9"), ClassInterface(ClassInterfaceType.None)]
-internal sealed class CUIAutomationClass { }
-
-[ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUIAutomation
-{
-    [PreserveSig] int CompareElements();
-    [PreserveSig] int CompareRuntimeIds();
-    [PreserveSig] int GetRootElement();
-    [PreserveSig] int ElementFromHandle();
-    [PreserveSig] int ElementFromPoint();
-    [PreserveSig] int GetFocusedElement([MarshalAs(UnmanagedType.Interface)] out IUIAutomationElement element);
-    [PreserveSig] int GetRootElementBuildCache();
-    [PreserveSig] int ElementFromHandleBuildCache();
-    [PreserveSig] int ElementFromPointBuildCache();
-    [PreserveSig] int GetFocusedElementBuildCache();
-    [PreserveSig] int CreateTreeWalker();
-    [PreserveSig] int get_ControlViewWalker();
-    [PreserveSig] int get_ContentViewWalker();
-    [PreserveSig] int get_RawViewWalker();
-    [PreserveSig] int get_RawViewCondition();
-    [PreserveSig] int get_ControlViewCondition();
-    [PreserveSig] int get_ContentViewCondition();
-    [PreserveSig] int CreateCacheRequest();
-    [PreserveSig] int CreateTrueCondition();
-    [PreserveSig] int CreateFalseCondition();
-    [PreserveSig] int CreatePropertyCondition();
-    [PreserveSig] int CreatePropertyConditionEx();
-    [PreserveSig] int CreateAndCondition();
-    [PreserveSig] int CreateAndConditionFromArray();
-    [PreserveSig] int CreateAndConditionFromNativeArray();
-    [PreserveSig] int CreateOrCondition();
-    [PreserveSig] int CreateOrConditionFromArray();
-    [PreserveSig] int CreateOrConditionFromNativeArray();
-    [PreserveSig] int CreateNotCondition();
-    [PreserveSig] int AddAutomationEventHandler();
-    [PreserveSig] int RemoveAutomationEventHandler();
-    [PreserveSig] int AddPropertyChangedEventHandlerNativeArray();
-    [PreserveSig] int AddPropertyChangedEventHandler();
-    [PreserveSig] int RemovePropertyChangedEventHandler();
-    [PreserveSig] int AddStructureChangedEventHandler();
-    [PreserveSig] int RemoveStructureChangedEventHandler();
-    [PreserveSig] int AddFocusChangedEventHandler();
-    [PreserveSig] int RemoveFocusChangedEventHandler();
-    [PreserveSig] int RemoveAllEventHandlers();
-    [PreserveSig] int IntNativeArrayToSafeArray();
-    [PreserveSig] int IntSafeArrayToNativeArray();
-    [PreserveSig] int RectToVariant();
-    [PreserveSig] int VariantToRect();
-    [PreserveSig] int SafeArrayToRectNativeArray();
-    [PreserveSig] int CreateProxyFactoryEntry();
-    [PreserveSig] int GetProxyFactoryMapping();
-    [PreserveSig] int GetPropertyProgrammaticName();
-    [PreserveSig] int GetPatternProgrammaticName();
-    [PreserveSig] int PollForPotentialSupportedPatterns();
-    [PreserveSig] int PollForPotentialSupportedProperties();
-    [PreserveSig] int CheckNotSupported();
-    [PreserveSig] int get_ReservedNotSupportedValue();
-    [PreserveSig] int get_ReservedMixedAttributeValue();
-    [PreserveSig] int ElementFromIAccessible();
-    [PreserveSig] int ElementFromIAccessibleBuildCache();
-}
-
-[ComImport, Guid("34723aff-0c9d-49d0-9896-7ab52df8cd8a"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUIAutomation2 : IUIAutomation
-{
-    [PreserveSig] int get_AutoSetFocus([MarshalAs(UnmanagedType.Bool)] out bool value);
-    [PreserveSig] int get_ConnectionTimeout(out uint value);
-    [PreserveSig] int get_TransactionTimeout(out uint value);
-    [PreserveSig] int put_AutoSetFocus([MarshalAs(UnmanagedType.Bool)] bool value);
-    [PreserveSig] int put_ConnectionTimeout(uint value);
-    [PreserveSig] int put_TransactionTimeout(uint value);
-}
-
-[ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUIAutomationElement
-{
-    [PreserveSig] int SetFocus();
-    [PreserveSig] int GetRuntimeId([MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_I4)] out int[] runtimeId);
-    [PreserveSig] int FindFirst();
-    [PreserveSig] int FindAll();
-    [PreserveSig] int FindFirstBuildCache();
-    [PreserveSig] int FindAllBuildCache();
-    [PreserveSig] int BuildUpdatedCache();
-    [PreserveSig] int GetCurrentPropertyValue(int propertyId, [MarshalAs(UnmanagedType.Struct)] out object value);
-    [PreserveSig] int GetCurrentPropertyValueEx();
-    [PreserveSig] int GetCachedPropertyValue();
-    [PreserveSig] int GetCachedPropertyValueEx();
-    [PreserveSig] int GetCurrentPattern(int patternId, [MarshalAs(UnmanagedType.Interface)] out object pattern);
-    [PreserveSig] int GetCurrentPatternAs();
-}
-
-[ComImport, Guid("32eba289-3583-42c9-9c59-3b6d9a1e9b6a"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUIAutomationTextPattern
-{
-    [PreserveSig] int GetSelection([MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UNKNOWN)] out IUIAutomationTextRange[] ranges);
-    [PreserveSig] int GetVisibleRanges();
-    [PreserveSig] int RangeFromChild();
-    [PreserveSig] int RangeFromPoint();
-    [PreserveSig] int get_DocumentRange([MarshalAs(UnmanagedType.Interface)] out IUIAutomationTextRange range);
-    [PreserveSig] int get_SupportedTextSelection();
-}
-
-[ComImport, Guid("a543cc6a-f4ae-494b-8239-c814481187a8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IUIAutomationTextRange
-{
-    [PreserveSig] int Clone([MarshalAs(UnmanagedType.Interface)] out IUIAutomationTextRange range);
-    [PreserveSig] int Compare([MarshalAs(UnmanagedType.Interface)] IUIAutomationTextRange range, [MarshalAs(UnmanagedType.Bool)] out bool areSame);
-    [PreserveSig] int CompareEndpoints(int endpoint, [MarshalAs(UnmanagedType.Interface)] IUIAutomationTextRange targetRange, int targetEndpoint, out int result);
-    [PreserveSig] int ExpandToEnclosingUnit(int unit);
-    [PreserveSig] int FindAttribute();
-    [PreserveSig] int FindText();
-    [PreserveSig] int GetAttributeValue();
-    [PreserveSig] int GetBoundingRectangles();
-    [PreserveSig] int GetEnclosingElement();
-    [PreserveSig] int GetText(int maxLength, [MarshalAs(UnmanagedType.BStr)] out string text);
-    [PreserveSig] int Move();
-    [PreserveSig] int MoveEndpointByUnit();
-    [PreserveSig] int MoveEndpointByRange(int endpoint, [MarshalAs(UnmanagedType.Interface)] IUIAutomationTextRange targetRange, int targetEndpoint);
-    [PreserveSig] int Select();
-    [PreserveSig] int AddToSelection();
-    [PreserveSig] int RemoveFromSelection();
-    [PreserveSig] int ScrollIntoView();
-    [PreserveSig] int GetChildren();
 }

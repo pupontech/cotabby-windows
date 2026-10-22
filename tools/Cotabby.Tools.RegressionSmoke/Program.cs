@@ -15,6 +15,7 @@ using Cotabby.Core.Insertion;
 using Cotabby.Win32.Insertion;
 using Cotabby.Win32.Focus;
 using Microsoft.Extensions.Logging.Abstractions;
+using static Cotabby.Win32.Interop.NativeMethods;
 
 internal static class Program
 {
@@ -94,7 +95,8 @@ internal static class Program
                 Require(box.IsKeyboardFocused, "fixture did not receive keyboard focus");
                 using var tracker = new UiaFocusTracker(NullLogger<UiaFocusTracker>.Instance);
                 var target = await Task.Run(() => tracker.Refresh());
-                Require(target is { IsCredentialField: false, StableFieldIdentity: not null }, "fixture has no proven UIA identity");
+                Require(target is { IsCredentialField: false, StableFieldIdentity: not null, CaretOffsetIsProven: true },
+                    "fixture has no proven UIA identity/caret");
                 var inserter = new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance);
                 // A stale target must not inject into the new foreground field.
                 var otherBox = new TextBox { Text = "other " };
@@ -184,9 +186,16 @@ internal static class Program
                 await Task.Delay(200);
                 Require(writingBox.IsKeyboardFocused, "emoji writing fixture did not receive focus");
                 var writingTarget = await Task.Run(() => tracker.Refresh());
-                Require(writingTarget is { IsCredentialField: false, IsSecure: false,
-                        ProcessId: > 0, StableFieldIdentity: not null, HasRuntimeIdIdentity: true },
-                    "ordinary writing fixture has no strong UIA RuntimeId identity");
+                Require(writingTarget is
+                {
+                    IsCredentialField: false,
+                    IsSecure: false,
+                    ProcessId: > 0,
+                    StableFieldIdentity: not null,
+                    HasRuntimeIdIdentity: true,
+                    CaretOffsetIsProven: true,
+                },
+                    "ordinary writing fixture has no strong UIA RuntimeId identity/caret");
                 Require(writingTarget!.ProcessId == Environment.ProcessId,
                     "ordinary writing fixture identity was not proven for this process");
 
@@ -381,6 +390,54 @@ internal static class Program
                     && writingBox.Text == "prefix:smile:abc"
                     && blockedCalls == 0 && destructiveInputCalls == 0,
                     "delayed same-field :smile:abc edit dispatched destructive input");
+
+                // Programmatic focus can change while the blocked validator reads
+                // TextPattern content. Reacquire focus and RuntimeId after that read
+                // before SendInput; the host fixture remains otherwise untouched.
+                writingBox.Focus();
+                writingBox.Text = ":smile:";
+                writingBox.CaretIndex = writingBox.Text.Length;
+                raceBox.Text = "race fixture";
+                await Task.Delay(150);
+                var contentRaceTarget = await Task.Run(() => tracker.Refresh());
+                Require(contentRaceTarget is { HasRuntimeIdIdentity: true, CaretOffsetIsProven: true },
+                    "content-read race fixture has no proven caret/runtime identity");
+                int contentReads = 0;
+                int contentRaceDispatches = 0;
+                var contentRaceBlockCalls = new List<(bool Block, bool Result, int ThreadId)>();
+                bool BlockAndRecord(bool block)
+                {
+                    bool result = BlockInput(block);
+                    contentRaceBlockCalls.Add((block, result, Environment.CurrentManagedThreadId));
+                    return result;
+                }
+                var contentRaceInserter = new SendInputTextInserter(
+                    NullLogger<SendInputTextInserter>.Instance,
+                    () => new BoundedUiaReplacementFocusValidator(() =>
+                    {
+                        if (Interlocked.Increment(ref contentReads) == 2)
+                            app.Dispatcher.Invoke(() =>
+                            {
+                                raceBox.Focus();
+                                raceBox.CaretIndex = raceBox.Text.Length;
+                            });
+                    }),
+                    BlockAndRecord,
+                    (count, _, _) =>
+                    {
+                        Interlocked.Increment(ref contentRaceDispatches);
+                        return count;
+                    });
+                var contentRaceResult = await contentRaceInserter.ReplaceTextAsync(
+                    contentRaceTarget!, 7, "😄", ":smile:", 13, CancellationToken.None);
+                Require(contentRaceResult.Status == TextReplacementStatus.Rejected
+                    && contentRaceDispatches == 0
+                    && contentRaceBlockCalls.Select(call => call.Block).SequenceEqual(new[] { true, false })
+                    && contentRaceBlockCalls.All(call => call.Result)
+                    && contentRaceBlockCalls.All(call => call.ThreadId == contentRaceBlockCalls[0].ThreadId)
+                    && writingBox.Text == ":smile:" && raceBox.Text == "race fixture",
+                    "focus change during the post-block content read was not refused before SendInput");
+                Console.WriteLine("PRODUCTION_EMOJI_POST_CONTENT_READ_FOCUS_REVALIDATION=PASS");
 
                 // Deterministic focus race: ownership is checked, BlockInput is acquired,
                 // then the final check sees a different fixture RuntimeId.

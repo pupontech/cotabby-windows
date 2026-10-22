@@ -33,6 +33,10 @@ public sealed record FocusedField
     /// <summary>Caret position as a UTF-16 offset into <see cref="Text"/>.</summary>
     public required int CaretOffset { get; init; }
 
+    /// <summary>True only when the platform read an actual caret/selection, not an inferred end-of-value position.</summary>
+    /// <remarks>False by default so destructive emoji replacement fails closed; ordinary suggestion snapshots may still use inferred offsets.</remarks>
+    public bool CaretOffsetIsProven { get; init; }
+
     /// <summary>Caret screen rectangle in physical pixels (DPI-aware).</summary>
     public required ScreenRect CaretRect { get; init; }
 

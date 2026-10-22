@@ -189,7 +189,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // for the address-shape fallback (it also produces the completion
             // prefix). If it reveals a credential, the text must not travel any
             // further — the returned snapshot carries no text.
-            var (text, caretOffset) = ReadTextAndCaret(element);
+            var (text, caretOffset, caretOffsetIsProven) = ReadTextAndCaret(element);
             if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text)
                 || (SmarterFieldSuppression && FieldSuppressionPolicy.ShouldBackOff(
                     text[..Math.Clamp(caretOffset, 0, text.Length)], controlType == "Edit")))
@@ -211,6 +211,7 @@ public sealed class UiaFocusTracker : IFocusTracker
                 ProcessName = TryGetProcessName(info.ProcessId),
                 Text = text,
                 CaretOffset = caretOffset,
+                CaretOffsetIsProven = caretOffsetIsProven,
                 CaretRect = caretRect.IsEmpty ? fieldRect : caretRect,
                 FieldRect = fieldRect,
                 IsSingleLine = controlType == "Edit",
@@ -488,7 +489,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         catch (Exception) { return false; }
     }
 
-    private (string text, int caretOffset) ReadTextAndCaret(AutomationElement element)
+    private (string text, int caretOffset, bool caretOffsetIsProven) ReadTextAndCaret(AutomationElement element)
     {
         // Prefer TextPattern: it gives both full text and the caret-as-selection.
         if (element.TryGetCurrentPattern(TextPattern.Pattern, out var rawText)
@@ -499,16 +500,19 @@ public sealed class UiaFocusTracker : IFocusTracker
                 // Cap to 16KB — coordinators only need a window around the caret.
                 string full = textPattern.DocumentRange.GetText(16 * 1024);
                 int caret = 0;
+                bool caretIsProven = false;
                 var sel = textPattern.GetSelection();
                 if (sel is { Length: > 0 })
                 {
                     var range = sel[0];
+                    caretIsProven = range.CompareEndpoints(
+                        TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End) == 0;
                     var preCaret = textPattern.DocumentRange.Clone();
                     preCaret.MoveEndpointByRange(
                         TextPatternRangeEndpoint.End, range, TextPatternRangeEndpoint.Start);
                     caret = preCaret.GetText(16 * 1024).Length;
                 }
-                return (full, caret);
+                return (full, caret, caretIsProven);
             }
             catch (Exception) { /* fall through */ }
         }
@@ -517,10 +521,10 @@ public sealed class UiaFocusTracker : IFocusTracker
             && rawValue is ValuePattern vp)
         {
             string v = vp.Current.Value ?? string.Empty;
-            return (v, v.Length); // caret at end as a fallback
+            return (v, v.Length, false); // ValuePattern has no caret; retain this only as a suggestion fallback.
         }
 
-        return (string.Empty, 0);
+        return (string.Empty, 0, false);
     }
 
     private ScreenRect ReadCaretRect(AutomationElement element)

@@ -6,7 +6,7 @@ public enum TextReplacementStatus
     Rejected,
     /// <summary>Every input event in the replacement batch was dispatched.</summary>
     Completed,
-    /// <summary>Only a prefix of the replacement batch was dispatched.</summary>
+    /// <summary>Only a prefix of the replacement batch was dispatched; resulting host content is unknown and is not restored.</summary>
     Partial,
 }
 

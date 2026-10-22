@@ -82,6 +82,7 @@ public sealed class EmojiReplacementTailTests
         ProcessName = "fixture",
         Text = text,
         CaretOffset = caretOffset,
+        CaretOffsetIsProven = true,
         CaretRect = ScreenRect.Empty,
         FieldRect = new ScreenRect(10, 20, 200, 24),
         IsSingleLine = true,

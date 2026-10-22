@@ -27,6 +27,26 @@ public sealed class EmojiFocusPolicyTests
     }
 
     [Fact]
+    public void ValuePatternOnlyEndOfValueCaretCannotProveEmojiReplacement()
+    {
+        var expected = Field("42.7.9", hasRuntimeIdIdentity: true) with
+        {
+            Text = "hello world",
+            CaretOffset = "hello world".Length,
+        };
+        var live = Field("42.7.9", hasRuntimeIdIdentity: true) with
+        {
+            Text = "hello world:smile:",
+            CaretOffset = "hello world:smile:".Length,
+        };
+
+        Assert.False(expected.CaretOffsetIsProven);
+        Assert.False(live.CaretOffsetIsProven);
+        Assert.False(EmojiFocusPolicy.MatchesExpectedReplacement(
+            expected, live, ":smile:", "hello world:smile:".Length));
+    }
+
+    [Fact]
     public void FocusGuardCoversOnlyUnmodifiedQueryMutationKeyDowns()
     {
         Assert.True(EmojiFocusPolicy.RequiresFreshFocus(Input(KeyKind.Character, isKeyDown: true)));
