@@ -37,6 +37,7 @@ public sealed class EmojiPickerController : IDisposable
     private readonly EmojiPopupWindow _popup;
     private readonly Dispatcher _dispatcher;
     private readonly ILogger<EmojiPickerController> _logger;
+    private readonly Func<int, CancellationToken, Task> _sendBackspacesAsync;
 
     private readonly EmojiTriggerStateMachine _state = new();
     private List<EmojiEntry> _matches = new();
@@ -51,7 +52,8 @@ public sealed class EmojiPickerController : IDisposable
         ITextInserter inserter,
         EmojiPopupWindow popup,
         Dispatcher dispatcher,
-        ILogger<EmojiPickerController> logger)
+        ILogger<EmojiPickerController> logger,
+        Func<int, CancellationToken, Task>? sendBackspacesAsync = null)
     {
         _hook = hook;
         _focus = focus;
@@ -59,6 +61,7 @@ public sealed class EmojiPickerController : IDisposable
         _popup = popup;
         _dispatcher = dispatcher;
         _logger = logger;
+        _sendBackspacesAsync = sendBackspacesAsync ?? EatCharsAsync;
         _hook.KeyEvent += OnKeyEvent;
     }
 
@@ -72,17 +75,33 @@ public sealed class EmojiPickerController : IDisposable
     {
         if (!Enabled) return;
 
-        // We need to know what the trigger anchor field is so we can backspace
-        // the typed colons + query on commit. Refresh focus lazily — only when
-        // we're about to enter an active state.
+        // Capture an owner when the trigger starts, then require every later
+        // event to still belong to that exact proven field. A null live snapshot
+        // (for example a suppressed search field) is not permission to fall back
+        // to the old trigger target.
         if (!_state.IsActive && args.Event.Kind == KeyKind.Character && args.Event.Character == ':')
         {
             _triggerField = _focus.Refresh();
-            if (_triggerField is null || _triggerField.IsSecure || _triggerField.IsCredentialField)
+            if (!IsUsableTarget(_triggerField))
             {
+                _triggerField = null;
                 return; // Don't start in fields where we can't insert anyway,
                         // or in a sign-in/verification field we must leave alone.
             }
+        }
+        else if (_state.IsActive)
+        {
+            var liveField = _focus.Refresh();
+            if (!SameUsableTarget(_triggerField, liveField))
+            {
+                _state.Reset();
+                ClearPopup();
+                return;
+            }
+
+            // Retain the latest snapshot for caret geometry and commit, but only
+            // after process + stable field identity have proved ownership.
+            _triggerField = liveField;
         }
 
         var outcome = _state.Apply(args.Event);
@@ -92,11 +111,11 @@ public sealed class EmojiPickerController : IDisposable
                 RefreshPopup();
                 return;
             case EmojiTriggerStateMachine.Outcome.Commit:
-                if (_matches.Count > 0)
+                if (_matches.Count > 0 && IsUsableTarget(_triggerField))
                 {
                     args.Suppress = true;
                     var entry = _matches[_selected];
-                    _ = CommitAsync(entry);
+                    _ = CommitAsync(_triggerField!, entry);
                 }
                 ClearPopup();
                 return;
@@ -113,9 +132,9 @@ public sealed class EmojiPickerController : IDisposable
     {
         _matches = EmojiMatcher.Search(_state.Query, max: 6);
         _selected = 0;
-        // Re-resolve the anchor each tick — the caret moves as the user types.
-        var field = _focus.Refresh() ?? _triggerField;
-        var anchor = field?.CaretRect ?? new ScreenRect(100, 100, 1, 20);
+        // OnKeyEvent has already revalidated and refreshed this field before
+        // every active query update. Never resurrect a stale target here.
+        var anchor = _triggerField?.CaretRect ?? new ScreenRect(100, 100, 1, 20);
         _dispatcher.BeginInvoke(() => _popup.Show(_matches, _state.Query, anchor, _selected));
     }
 
@@ -127,12 +146,14 @@ public sealed class EmojiPickerController : IDisposable
         _dispatcher.BeginInvoke(() => _popup.Hide());
     }
 
-    private async Task CommitAsync(EmojiEntry entry)
+    private async Task CommitAsync(FocusedField target, EmojiEntry entry)
     {
         try
         {
-            var field = _focus.Refresh() ?? _triggerField;
-            if (field is null || field.IsCredentialField) return;
+            // Focus can change between the hook event and this asynchronous
+            // commit. Require both snapshots to prove the captured owner before
+            // any synthetic backspace, and fail closed on missing identity.
+            if (!SameUsableTarget(target, _focus.Refresh())) return;
 
             // The user typed ":query:" — eat those characters with backspaces
             // before inserting the glyph. Length of ":query:" = query + 2.
@@ -142,8 +163,9 @@ public sealed class EmojiPickerController : IDisposable
             // making the {backspace*N}{paste} sequence atomic from the host's
             // perspective.
             int eat = _state.QueryAtCommitLength;
-            await EatCharsAsync(eat, CancellationToken.None);
-            await _inserter.InsertAsync(field, entry.Glyph, CancellationToken.None);
+            await _sendBackspacesAsync(eat, CancellationToken.None);
+            if (!SameUsableTarget(target, _focus.Refresh())) return;
+            await _inserter.InsertAsync(target, entry.Glyph, CancellationToken.None);
 
             // Deliberately logs the catalog name, not the typed query: the query
             // is user text and is not written to the local log.
@@ -156,6 +178,16 @@ public sealed class EmojiPickerController : IDisposable
             _logger.LogWarning(ex, "Emoji commit failed.");
         }
     }
+
+    private static bool IsUsableTarget(FocusedField? field) =>
+        field is { ProcessId: > 0, IsSecure: false, IsCredentialField: false }
+        && !string.IsNullOrWhiteSpace(field.StableFieldIdentity);
+
+    private static bool SameUsableTarget(FocusedField? expected, FocusedField? live) =>
+        IsUsableTarget(expected)
+        && IsUsableTarget(live)
+        && expected!.ProcessId == live!.ProcessId
+        && string.Equals(expected.StableFieldIdentity, live.StableFieldIdentity, StringComparison.Ordinal);
 
     private static async Task EatCharsAsync(int count, CancellationToken ct)
     {

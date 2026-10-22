@@ -3,10 +3,13 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Cotabby.App.Emoji;
 using Cotabby.App.Hosting;
 using Cotabby.App.Overlay;
 using Cotabby.App.UI;
 using Cotabby.Core.Focus;
+using Cotabby.Core.Input;
+using Cotabby.Core.Insertion;
 using Cotabby.Win32.Insertion;
 using Cotabby.Win32.Focus;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -149,26 +152,77 @@ internal static class Program
                 Require(cancellation.IsCancellationRequested && box.Text == expected,
                     "cancellation case did not observe dispatched host text");
                 Console.WriteLine("PRODUCTION_INSERTER_POST_DISPATCH_CANCELLATION_ACCOUNTED=PASS");
-                // Prove metadata policy through a real UIA provider. A positive
-                // ordinary-field snapshot immediately before/after rules out a
-                // generic focus/UIA outage being mistaken for search suppression.
+                fixture.Close();
+
+                // Exercise the real EmojiPickerController against two real UIA
+                // controls in one dedicated fixture window. This is deliberately
+                // the only target of the emoji focus-loss regression; never point
+                // the smoke at an arbitrary foreground/user-owned surface.
+                var writingBox = new TextBox { Text = "ordinary notes", FontSize = 18 };
+                System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
+                System.Windows.Automation.AutomationProperties.SetAutomationId(writingBox, "writing-notes");
                 var searchBox = new TextBox { Text = "dummy query", FontSize = 18 };
                 System.Windows.Automation.AutomationProperties.SetName(searchBox, "Search mail");
                 System.Windows.Automation.AutomationProperties.SetAutomationId(searchBox, "ms-searchux-input");
-                var searchWindow = new Window { Content = searchBox, Width = 400, Height = 160 };
-                searchWindow.Show();
-                searchWindow.Activate();
-                searchBox.Focus();
+                var emojiFixture = new Window
+                {
+                    Content = new StackPanel { Children = { writingBox, searchBox } },
+                    Width = 500,
+                    Height = 240,
+                    Title = "Cotabby emoji focus regression fixture",
+                };
+                emojiFixture.Show();
+                emojiFixture.Activate();
+                writingBox.Focus();
+                writingBox.CaretIndex = writingBox.Text.Length;
                 await Task.Delay(200);
-                Require(searchBox.IsKeyboardFocused, "search fixture did not receive focus");
-                Require(await Task.Run(() => tracker.Refresh()) is null, "search query produced a completion snapshot");
-                System.Windows.Automation.AutomationProperties.SetName(searchBox, "Research notes");
-                System.Windows.Automation.AutomationProperties.SetAutomationId(searchBox, "research-notes");
-                Require(await Task.Run(() => tracker.Refresh()) is { IsCredentialField: false, Text: "dummy query" },
-                    "ordinary writing fixture was incorrectly suppressed or UIA unavailable");
-                Console.WriteLine("SEARCH_UIA_METADATA_SUPPRESSION_AND_ORDINARY_FIELD_CONTROL=PASS");
-                searchWindow.Close();
-                fixture.Close();
+                Require(writingBox.IsKeyboardFocused, "emoji writing fixture did not receive focus");
+                var writingTarget = await Task.Run(() => tracker.Refresh());
+                Require(writingTarget is { IsCredentialField: false, IsSecure: false,
+                        ProcessId: > 0, StableFieldIdentity: not null },
+                    "ordinary writing fixture has no proven UIA target identity");
+                Require(writingTarget!.ProcessId == Environment.ProcessId
+                        && !string.IsNullOrWhiteSpace(writingTarget.StableFieldIdentity),
+                    "ordinary writing fixture identity was not proven for this process");
+
+                var emojiHook = new RegressionKeyboardHook();
+                var emojiInserter = new RecordingTextInserter();
+                var emojiPopup = new EmojiPopupWindow();
+                int requestedBackspaces = 0;
+                using (var emojiPicker = new EmojiPickerController(
+                    emojiHook, tracker, emojiInserter, emojiPopup, app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance,
+                    (count, _) =>
+                    {
+                        Interlocked.Add(ref requestedBackspaces, count);
+                        return Task.CompletedTask;
+                    }))
+                {
+                    await Task.Run(() => emojiHook.Raise(':'));
+                    foreach (char c in "smile")
+                        await Task.Run(() => emojiHook.Raise(c));
+
+                    searchBox.Focus();
+                    searchBox.CaretIndex = searchBox.Text.Length;
+                    await Task.Delay(200);
+                    Require(searchBox.IsKeyboardFocused, "emoji search fixture did not receive focus");
+                    Require(await Task.Run(() => tracker.Refresh()) is null,
+                        "search field was not suppressed by the production UIA tracker");
+
+                    string searchTextBeforeTrailingColon = searchBox.Text;
+                    var trailingColon = await Task.Run(() => emojiHook.Raise(':'));
+                    await Task.Delay(250);
+                    Require(!trailingColon.Suppress,
+                        "trailing colon was suppressed after emoji query focus moved to search");
+                    Require(searchBox.Text == searchTextBeforeTrailingColon,
+                        "stale emoji commit modified the focused search fixture");
+                    Require(Volatile.Read(ref requestedBackspaces) == 0,
+                        "stale emoji commit requested synthetic backspaces for the focused search fixture");
+                    Require(emojiInserter.CallCount == 0,
+                        "stale emoji commit attempted insertion into the former writing target");
+                }
+                emojiFixture.Close();
+                Console.WriteLine("EMOJI_FOCUS_LOSS_SEARCH_FIELD_UNCHANGED_NO_STALE_INSERT=PASS");
                 overlay.Close();
                 result = 0;
             }
@@ -186,5 +240,38 @@ internal static class Program
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private sealed class RegressionKeyboardHook : IKeyboardHook
+    {
+        public event EventHandler<KeyEventArgs>? KeyEvent;
+        public void Start() { }
+        public void Stop() { }
+        public void Dispose() { }
+
+        public KeyEventArgs Raise(char character)
+        {
+            var args = new KeyEventArgs(new KeyboardEvent
+            {
+                Kind = KeyKind.Character,
+                Character = character,
+                HasNonShiftModifier = false,
+                IsKeyDown = true,
+            });
+            KeyEvent?.Invoke(this, args);
+            return args;
+        }
+    }
+
+    private sealed class RecordingTextInserter : ITextInserter
+    {
+        private int _callCount;
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _callCount);
+            return Task.FromResult(false);
+        }
     }
 }
