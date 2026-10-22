@@ -115,8 +115,6 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
             if (content is null) return false;
             _afterContentReadForTesting?.Invoke();
             string textBeforeCaret = content.Value.Text;
-            if (CredentialFieldDetector.IsCredentialField(
-                    controlType, labels, automationId, textBeforeCaret, isPassword)) return false;
 
             var live = expected with
             {
@@ -133,7 +131,7 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
             // Content reads can take long enough for programmatic focus changes
             // despite BlockInput. Re-resolve the focused element and prove its
             // RuntimeId/foreground immediately before the caller dispatches input.
-            if (!FocusStillMatchesExpectedAfterContentRead(expected)) return false;
+            if (!FocusStillMatchesExpectedAfterContentRead(expected, textBeforeCaret)) return false;
 
             return EmojiFocusPolicy.MatchesExpectedReplacement(
                 expected, live, expectedTail, expectedCaretOffset);
@@ -203,9 +201,11 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         return (value, false);
     }
 
-    private bool FocusStillMatchesExpectedAfterContentRead(FocusedField expected)
+    private bool FocusStillMatchesExpectedAfterContentRead(FocusedField expected, string textBeforeCaret)
     {
         IUIAutomationElement? focused = null;
+        IUIAutomationElement? labeledBy = null;
+        IUIAutomationElement? confirmedFocused = null;
         try
         {
             BeforeUiaCall();
@@ -215,7 +215,21 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
             int processId = ReadProperty<int>(focused, ProcessIdProperty);
             bool hasKeyboardFocus = ReadProperty<bool>(focused, HasKeyboardFocusProperty);
             bool isPassword = ReadProperty<bool>(focused, IsPasswordProperty);
+            int controlTypeId = ReadProperty<int>(focused, ControlTypeProperty);
+            string controlType = ControlTypeName(controlTypeId);
+            string? name = ReadOptionalString(focused, NameProperty);
+            string? helpText = ReadOptionalString(focused, HelpTextProperty);
+            string? automationId = ReadOptionalString(focused, AutomationIdProperty);
+            object? labeledObject = ReadPropertyObject(focused, LabeledByProperty);
+            if (labeledObject is IUIAutomationElement labelElement) labeledBy = labelElement;
+            string? labeledByName = labeledBy is null ? null : ReadOptionalString(labeledBy, NameProperty);
+
             if (processId != expected.ProcessId || !hasKeyboardFocus || isPassword) return false;
+            var labels = new[] { name, helpText, labeledByName };
+            if (SearchFieldDetector.IsSearchField(controlType, labels, automationId)
+                || CredentialFieldDetector.IsCredentialField(
+                    controlType, labels, automationId, textBeforeCaret, isPassword))
+                return false;
 
             BeforeUiaCall();
             CheckHResult(focused.GetRuntimeId(out int[] runtimeId));
@@ -223,6 +237,23 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
 
             string identity = string.Join('.', runtimeId);
             if (!string.Equals(identity, expected.StableFieldIdentity, StringComparison.Ordinal)) return false;
+
+            // The metadata reads above can themselves take time. Confirm that
+            // the same strong-identity element still owns focus after them.
+            BeforeUiaCall();
+            CheckHResult(_automation.GetFocusedElement(out confirmedFocused));
+            if (confirmedFocused is null) return false;
+            int confirmedProcessId = ReadProperty<int>(confirmedFocused, ProcessIdProperty);
+            bool confirmedHasKeyboardFocus = ReadProperty<bool>(confirmedFocused, HasKeyboardFocusProperty);
+            bool confirmedIsPassword = ReadProperty<bool>(confirmedFocused, IsPasswordProperty);
+            if (confirmedProcessId != expected.ProcessId || !confirmedHasKeyboardFocus || confirmedIsPassword)
+                return false;
+
+            BeforeUiaCall();
+            CheckHResult(confirmedFocused.GetRuntimeId(out int[] confirmedRuntimeId));
+            if (confirmedRuntimeId is not { Length: > 0 }
+                || !string.Equals(string.Join('.', confirmedRuntimeId), expected.StableFieldIdentity, StringComparison.Ordinal))
+                return false;
 
             IntPtr foreground = GetForegroundWindow();
             GetWindowThreadProcessId(foreground, out uint foregroundProcessId);
@@ -234,6 +265,8 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         }
         finally
         {
+            ReleaseComObject(labeledBy);
+            ReleaseComObject(confirmedFocused);
             ReleaseComObject(focused);
         }
     }
