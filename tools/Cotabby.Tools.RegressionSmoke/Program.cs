@@ -452,8 +452,8 @@ internal static class Program
                     "focus change during the second post-block content read was not refused before SendInput");
                 Console.WriteLine("PRODUCTION_EMOJI_POST_CONTENT_READ_FOCUS_REVALIDATION=PASS");
 
-                // These are deliberately expected to fail on Windows until the
-                // production post-content recheck rereads search/credential metadata.
+                // Changing these labels after the content read must be caught by
+                // the post-content metadata recheck while focus stays on this control.
                 bool metadataMutationsRefused = true;
                 foreach (string changedName in new[] { "Search mail", "Email" })
                 {
@@ -506,6 +506,72 @@ internal static class Program
                 Require(metadataMutationsRefused,
                     "post-content validation did not reject Search mail/Email metadata changes after exactly two content reads");
                 Console.WriteLine("PRODUCTION_EMOJI_POST_CONTENT_METADATA_REVALIDATION=PASS");
+
+                // Change metadata after the first post-content classification,
+                // while the same control still has focus and the same RuntimeId.
+                bool confirmedMetadataChangesRefused = true;
+                foreach (string changedName in new[] { "Search mail", "Email" })
+                {
+                    writingBox.Focus();
+                    System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
+                    writingBox.Text = string.Empty;
+                    writingBox.CaretIndex = 0;
+                    await Task.Delay(150);
+                    var confirmedMetadataTarget = await Task.Run(() => tracker.Refresh());
+                    Require(confirmedMetadataTarget is
+                    {
+                        Text.Length: 0,
+                        CaretOffset: 0,
+                        HasRuntimeIdIdentity: true,
+                        CaretOffsetIsProven: true,
+                        IsCredentialField: false,
+                    }, "confirmed-metadata fixture did not capture a safe empty pre-trigger target");
+                    writingBox.Text = contentRaceTail;
+                    writingBox.CaretIndex = writingBox.Text.Length;
+                    string confirmedMetadataTextBefore = writingBox.Text;
+                    int contentReadsBeforeConfirm = 0;
+                    int metadataReadsBeforeConfirm = 0;
+                    int confirmedMetadataDispatches = 0;
+                    var confirmedMetadataInserter = new SendInputTextInserter(
+                        NullLogger<SendInputTextInserter>.Instance,
+                        () => new BoundedUiaReplacementFocusValidator(
+                            afterContentReadForTesting: () => Interlocked.Increment(ref contentReadsBeforeConfirm),
+                            afterMetadataReadForTesting: () =>
+                            {
+                                if (Interlocked.Increment(ref metadataReadsBeforeConfirm) == 2)
+                                    app.Dispatcher.Invoke(() =>
+                                        System.Windows.Automation.AutomationProperties.SetName(writingBox, changedName));
+                            }),
+                        _ => true,
+                        (count, _, _) =>
+                        {
+                            Interlocked.Increment(ref confirmedMetadataDispatches);
+                            return count;
+                        });
+                    int confirmedExpectedCaretOffset = confirmedMetadataTarget!.CaretOffset + contentRaceTail.Length;
+                    var confirmedMetadataResult = await confirmedMetadataInserter.ReplaceTextAsync(
+                        confirmedMetadataTarget, contentRaceTail.Length, "😄", contentRaceTail,
+                        confirmedExpectedCaretOffset, CancellationToken.None);
+                    await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    var focusedAutomationElement = await Task.Run(
+                        () => System.Windows.Automation.AutomationElement.FocusedElement);
+                    string? focusedRuntimeIdentity = focusedAutomationElement is null
+                        ? null
+                        : string.Join('.', focusedAutomationElement.GetRuntimeId());
+                    confirmedMetadataChangesRefused &= confirmedMetadataResult.Status == TextReplacementStatus.Rejected
+                        && Volatile.Read(ref contentReadsBeforeConfirm) == 2
+                        && Volatile.Read(ref metadataReadsBeforeConfirm) == 2
+                        && confirmedMetadataDispatches == 0
+                        && writingBox.Text == confirmedMetadataTextBefore
+                        && writingBox.IsKeyboardFocused
+                        && string.Equals(
+                            focusedRuntimeIdentity, confirmedMetadataTarget.StableFieldIdentity, StringComparison.Ordinal)
+                        && System.Windows.Automation.AutomationProperties.GetName(writingBox) == changedName;
+                    System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
+                }
+                Require(confirmedMetadataChangesRefused,
+                    "final focused-element confirmation failed to reject metadata changes after the first classification");
+                Console.WriteLine("PRODUCTION_EMOJI_FINAL_METADATA_CONFIRMATION=PASS");
 
                 // Deterministic focus race: ownership is checked, BlockInput is acquired,
                 // then the final check sees a different fixture RuntimeId.

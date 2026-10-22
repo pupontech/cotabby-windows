@@ -43,11 +43,15 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
 
     private readonly IUIAutomation2 _automation;
     private readonly Action? _afterContentReadForTesting;
+    private readonly Action? _afterMetadataReadForTesting;
     private Stopwatch? _budget;
 
-    internal BoundedUiaReplacementFocusValidator(Action? afterContentReadForTesting = null)
+    internal BoundedUiaReplacementFocusValidator(
+        Action? afterContentReadForTesting = null,
+        Action? afterMetadataReadForTesting = null)
     {
         _afterContentReadForTesting = afterContentReadForTesting;
+        _afterMetadataReadForTesting = afterMetadataReadForTesting;
         var coclass = Activator.CreateInstance(typeof(CUIAutomationClass))
             ?? throw new InvalidOperationException("Could not create the UI Automation client.");
         try
@@ -206,6 +210,7 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         IUIAutomationElement? focused = null;
         IUIAutomationElement? labeledBy = null;
         IUIAutomationElement? confirmedFocused = null;
+        IUIAutomationElement? confirmedLabeledBy = null;
         try
         {
             BeforeUiaCall();
@@ -231,6 +236,10 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
                     controlType, labels, automationId, textBeforeCaret, isPassword))
                 return false;
 
+            // Test seam for a same-element metadata change between checks.
+            // Production leaves this unset.
+            _afterMetadataReadForTesting?.Invoke();
+
             BeforeUiaCall();
             CheckHResult(focused.GetRuntimeId(out int[] runtimeId));
             if (runtimeId is not { Length: > 0 }) return false;
@@ -249,6 +258,27 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
             if (confirmedProcessId != expected.ProcessId || !confirmedHasKeyboardFocus || confirmedIsPassword)
                 return false;
 
+            // The field can change semantic role without changing RuntimeId.
+            // Reclassify the freshly confirmed element before authorizing input.
+            int confirmedControlTypeId = ReadProperty<int>(confirmedFocused, ControlTypeProperty);
+            string confirmedControlType = ControlTypeName(confirmedControlTypeId);
+            string? confirmedName = ReadOptionalString(confirmedFocused, NameProperty);
+            string? confirmedHelpText = ReadOptionalString(confirmedFocused, HelpTextProperty);
+            string? confirmedAutomationId = ReadOptionalString(confirmedFocused, AutomationIdProperty);
+            object? confirmedLabeledObject = ReadPropertyObject(confirmedFocused, LabeledByProperty);
+            if (confirmedLabeledObject is IUIAutomationElement confirmedLabelElement)
+                confirmedLabeledBy = confirmedLabelElement;
+            else
+                ReleaseComObject(confirmedLabeledObject);
+            string? confirmedLabeledByName = confirmedLabeledBy is null
+                ? null
+                : ReadOptionalString(confirmedLabeledBy, NameProperty);
+            var confirmedLabels = new[] { confirmedName, confirmedHelpText, confirmedLabeledByName };
+            if (SearchFieldDetector.IsSearchField(confirmedControlType, confirmedLabels, confirmedAutomationId)
+                || CredentialFieldDetector.IsCredentialField(
+                    confirmedControlType, confirmedLabels, confirmedAutomationId, textBeforeCaret, confirmedIsPassword))
+                return false;
+
             BeforeUiaCall();
             CheckHResult(confirmedFocused.GetRuntimeId(out int[] confirmedRuntimeId));
             if (confirmedRuntimeId is not { Length: > 0 }
@@ -265,6 +295,7 @@ internal sealed class BoundedUiaReplacementFocusValidator : IEmojiReplacementFoc
         }
         finally
         {
+            ReleaseComObject(confirmedLabeledBy);
             ReleaseComObject(labeledBy);
             ReleaseComObject(confirmedFocused);
             ReleaseComObject(focused);
