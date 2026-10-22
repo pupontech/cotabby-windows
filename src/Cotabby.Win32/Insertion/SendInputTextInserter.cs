@@ -38,8 +38,64 @@ public sealed class SendInputTextInserter : ITextInserter
 {
     private readonly ILogger<SendInputTextInserter> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Action? _afterInputBlockedForTesting;
 
     public SendInputTextInserter(ILogger<SendInputTextInserter> logger) => _logger = logger;
+
+    internal SendInputTextInserter(
+        ILogger<SendInputTextInserter> logger,
+        Action afterInputBlockedForTesting)
+    {
+        _logger = logger;
+        _afterInputBlockedForTesting = afterInputBlockedForTesting;
+    }
+
+    /// <summary>
+    /// Replace trailing text and its replacement in one native input transaction.
+    /// The final UIA/foreground check occurs after input blocking and immediately
+    /// before the single SendInput call.
+    /// </summary>
+    public async Task<bool> ReplaceTextAsync(
+        FocusedField target, int charactersToReplace, string text, CancellationToken ct)
+    {
+        if (charactersToReplace < 0 || (charactersToReplace == 0 && text.Length == 0)) return false;
+        if (!target.HasRuntimeIdIdentity || string.IsNullOrWhiteSpace(target.StableFieldIdentity)) return false;
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            return await OnStaThreadAsync(() => ReplaceOnStaThread(target, charactersToReplace, text, ct))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private bool ReplaceOnStaThread(FocusedField target, int charactersToReplace, string text, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!TargetStillFocused(target, requireRuntimeIdIdentity: true)) return false;
+
+        if (!BlockInput(true)) return false;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            _afterInputBlockedForTesting?.Invoke();
+            if (!TargetStillFocused(target, requireRuntimeIdIdentity: true)) return false;
+
+            // No await or callback after the final ownership check: deletes and
+            // glyph are dispatched together, on the same native thread.
+            return SendUnicodeReplacement(charactersToReplace, text);
+        }
+        finally
+        {
+            if (!BlockInput(false))
+                _logger.LogWarning("BlockInput(false) failed after emoji replacement attempt.");
+        }
+    }
 
     /// <summary>
     /// Chunks at or below this length go through a single SendInput unicode
@@ -150,9 +206,11 @@ public sealed class SendInputTextInserter : ITextInserter
 
     // Runs off the WPF dispatcher: querying UIA in-process from the UI thread
     // can deadlock. Do not trust a snapshot across the semaphore/clipboard waits.
-    private static bool TargetStillFocused(FocusedField target)
+    private static bool TargetStillFocused(FocusedField target, bool requireRuntimeIdIdentity = false)
     {
         if (target.IsCredentialField || target.IsSecure
+            || (requireRuntimeIdIdentity && (!target.HasRuntimeIdIdentity
+                || string.IsNullOrWhiteSpace(target.StableFieldIdentity)))
             || target.ElementHandle is not AutomationElement expected) return false;
         try
         {
@@ -160,6 +218,13 @@ public sealed class SendInputTextInserter : ITextInserter
             if (current is null || current.Current.ProcessId != target.ProcessId
                 || current.Current.IsPassword || !current.Current.HasKeyboardFocus
                 || !Automation.Compare(expected, current)) return false;
+            if (requireRuntimeIdIdentity)
+            {
+                int[]? runtimeId = current.GetRuntimeId();
+                if (runtimeId is not { Length: > 0 }
+                    || !string.Equals(string.Join('.', runtimeId), target.StableFieldIdentity, StringComparison.Ordinal))
+                    return false;
+            }
             var foreground = GetForegroundWindow();
             GetWindowThreadProcessId(foreground, out uint pid);
             return foreground != IntPtr.Zero && pid == target.ProcessId;
@@ -202,6 +267,7 @@ public sealed class SendInputTextInserter : ITextInserter
 
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
+    private const ushort VK_BACK = 0x08;
 
     /// <summary>
     /// Send Ctrl-down, V-down, V-up, Ctrl-up via SendInput. We use regular
@@ -232,6 +298,24 @@ public sealed class SendInputTextInserter : ITextInserter
         {
             inputs[i * 2] = MakeUnicodeInput(text[i], keyUp: false);
             inputs[i * 2 + 1] = MakeUnicodeInput(text[i], keyUp: true);
+        }
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
+    }
+
+    /// <summary>Send the backspaces and replacement glyph in one native batch.</summary>
+    private static bool SendUnicodeReplacement(int charactersToReplace, string text)
+    {
+        var inputs = new INPUT[checked((charactersToReplace + text.Length) * 2)];
+        for (int i = 0; i < charactersToReplace; i++)
+        {
+            inputs[i * 2] = MakeVkInput(VK_BACK, keyUp: false);
+            inputs[i * 2 + 1] = MakeVkInput(VK_BACK, keyUp: true);
+        }
+        for (int i = 0; i < text.Length; i++)
+        {
+            int offset = (charactersToReplace + i) * 2;
+            inputs[offset] = MakeUnicodeInput(text[i], keyUp: false);
+            inputs[offset + 1] = MakeUnicodeInput(text[i], keyUp: true);
         }
         return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
     }

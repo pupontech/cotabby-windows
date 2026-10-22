@@ -875,6 +875,9 @@ public sealed class SuggestionCoordinatorDoubleTapTests
                 plan?.Finished.TrySetResult();
             }
         }
+
+        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct) =>
+            Task.FromResult(false);
     }
 
     internal sealed class InsertGate

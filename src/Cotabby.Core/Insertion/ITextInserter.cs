@@ -11,6 +11,17 @@ namespace Cotabby.Core.Insertion;
 public interface ITextInserter
 {
     /// <summary>
+    /// Atomically replace the requested number of trailing characters in
+    /// <paramref name="target"/> with <paramref name="text"/>.
+    /// </summary>
+    /// <remarks>
+    /// Implementations must fail closed unless ownership is proven, serialize
+    /// input blocking and injection on one native thread, and perform no await
+    /// between the final ownership check and dispatching the replacement batch.
+    /// </remarks>
+    Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct);
+
+    /// <summary>
     /// Insert <paramref name="text"/> at the caret of <paramref name="target"/>.
     /// Returns false if the field is no longer focused or the insertion was rejected.
     /// </summary>

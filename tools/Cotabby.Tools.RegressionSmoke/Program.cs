@@ -154,21 +154,22 @@ internal static class Program
                 Console.WriteLine("PRODUCTION_INSERTER_POST_DISPATCH_CANCELLATION_ACCOUNTED=PASS");
                 fixture.Close();
 
-                // Exercise the real EmojiPickerController against two real UIA
-                // controls in one dedicated fixture window. This is deliberately
-                // the only target of the emoji focus-loss regression; never point
-                // the smoke at an arbitrary foreground/user-owned surface.
+                // Exercise the production emoji controller against dedicated
+                // fixture controls only. No user-owned surface receives input.
                 var writingBox = new TextBox { Text = "ordinary notes", FontSize = 18 };
                 System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
                 System.Windows.Automation.AutomationProperties.SetAutomationId(writingBox, "writing-notes");
                 var searchBox = new TextBox { Text = "dummy query", FontSize = 18 };
                 System.Windows.Automation.AutomationProperties.SetName(searchBox, "Search mail");
                 System.Windows.Automation.AutomationProperties.SetAutomationId(searchBox, "ms-searchux-input");
+                var raceBox = new TextBox { Text = "race fixture", FontSize = 18 };
+                System.Windows.Automation.AutomationProperties.SetName(raceBox, "Writing race fixture");
+                System.Windows.Automation.AutomationProperties.SetAutomationId(raceBox, "writing-race-fixture");
                 var emojiFixture = new Window
                 {
-                    Content = new StackPanel { Children = { writingBox, searchBox } },
+                    Content = new StackPanel { Children = { writingBox, searchBox, raceBox } },
                     Width = 500,
-                    Height = 240,
+                    Height = 300,
                     Title = "Cotabby emoji focus regression fixture",
                 };
                 emojiFixture.Show();
@@ -179,50 +180,160 @@ internal static class Program
                 Require(writingBox.IsKeyboardFocused, "emoji writing fixture did not receive focus");
                 var writingTarget = await Task.Run(() => tracker.Refresh());
                 Require(writingTarget is { IsCredentialField: false, IsSecure: false,
-                        ProcessId: > 0, StableFieldIdentity: not null },
-                    "ordinary writing fixture has no proven UIA target identity");
-                Require(writingTarget!.ProcessId == Environment.ProcessId
-                        && !string.IsNullOrWhiteSpace(writingTarget.StableFieldIdentity),
+                        ProcessId: > 0, StableFieldIdentity: not null, HasRuntimeIdIdentity: true },
+                    "ordinary writing fixture has no strong UIA RuntimeId identity");
+                Require(writingTarget!.ProcessId == Environment.ProcessId,
                     "ordinary writing fixture identity was not proven for this process");
 
-                var emojiHook = new RegressionKeyboardHook();
-                var emojiInserter = new RecordingTextInserter();
-                var emojiPopup = new EmojiPopupWindow();
-                int requestedBackspaces = 0;
-                using (var emojiPicker = new EmojiPickerController(
-                    emojiHook, tracker, emojiInserter, emojiPopup, app.Dispatcher,
-                    NullLogger<EmojiPickerController>.Instance,
-                    (count, _) =>
-                    {
-                        Interlocked.Add(ref requestedBackspaces, count);
-                        return Task.CompletedTask;
-                    }))
+                // Identical descriptor identities are deliberately insufficient for emoji.
+                tracker.SetFakeFieldForTesting(writingTarget with
                 {
-                    await Task.Run(() => emojiHook.Raise(':'));
-                    foreach (char c in "smile")
-                        await Task.Run(() => emojiHook.Raise(c));
+                    StableFieldIdentity = "ct=Edit|aid=|nm=|hwnd=123|pid=42|gen=0",
+                    HasRuntimeIdIdentity = false,
+                });
+                var fallbackHook = new RegressionKeyboardHook();
+                var fallbackInserter = new RecordingTextInserter();
+                using (var fallbackPicker = new EmojiPickerController(
+                    fallbackHook, tracker, fallbackInserter, new EmojiPopupWindow(), app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance))
+                {
+                    await Task.Run(() => fallbackHook.Raise(':'));
+                    foreach (char c in "smile") await Task.Run(() => fallbackHook.Raise(c));
+                    var fallbackCommit = await Task.Run(() => fallbackHook.Raise(':'));
+                    await Task.Delay(150);
+                    Require(!fallbackCommit.Suppress && fallbackInserter.ReplaceCallCount == 0,
+                        "descriptor-only fallback target reached emoji replacement");
+                }
+                tracker.SetFakeFieldForTesting(null);
+                Console.WriteLine("EMOJI_DESCRIPTOR_ONLY_IDENTITY_REFUSED=PASS");
+
+                // Key-up and non-character hook notifications must not synchronously refresh UIA.
+                var callbackFocus = new CountingFocusTracker(tracker);
+                var callbackHook = new RegressionKeyboardHook();
+                var callbackInserter = new RecordingTextInserter();
+                using (var callbackPicker = new EmojiPickerController(
+                    callbackHook, callbackFocus, callbackInserter, new EmojiPopupWindow(), app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance))
+                {
+                    await Task.Run(() => callbackHook.Raise(':'));
+                    await Task.Run(() => callbackHook.Raise('s'));
+                    int characterReadCount = callbackFocus.RefreshCount;
+                    await Task.Run(() => callbackHook.Raise(new KeyboardEvent
+                    {
+                        Kind = KeyKind.Character, Character = 's', HasNonShiftModifier = false, IsKeyDown = false,
+                    }));
+                    await Task.Run(() => callbackHook.Raise(new KeyboardEvent
+                    {
+                        Kind = KeyKind.Other, Character = '\0', HasNonShiftModifier = false, IsKeyDown = true,
+                    }));
+                    Require(callbackFocus.RefreshCount == characterReadCount,
+                        "active emoji query refreshed UIA for key-up or non-character events");
 
                     searchBox.Focus();
                     searchBox.CaretIndex = searchBox.Text.Length;
+                    await Task.Delay(150);
+                    string searchBeforeTrailingColon = searchBox.Text;
+                    var trailingColon = await Task.Run(() => callbackHook.Raise(':'));
                     await Task.Delay(200);
-                    Require(searchBox.IsKeyboardFocused, "emoji search fixture did not receive focus");
-                    Require(await Task.Run(() => tracker.Refresh()) is null,
-                        "search field was not suppressed by the production UIA tracker");
-
-                    string searchTextBeforeTrailingColon = searchBox.Text;
-                    var trailingColon = await Task.Run(() => emojiHook.Raise(':'));
-                    await Task.Delay(250);
                     Require(!trailingColon.Suppress,
                         "trailing colon was suppressed after emoji query focus moved to search");
-                    Require(searchBox.Text == searchTextBeforeTrailingColon,
+                    Require(searchBox.Text == searchBeforeTrailingColon,
                         "stale emoji commit modified the focused search fixture");
-                    Require(Volatile.Read(ref requestedBackspaces) == 0,
-                        "stale emoji commit requested synthetic backspaces for the focused search fixture");
-                    Require(emojiInserter.CallCount == 0,
-                        "stale emoji commit attempted insertion into the former writing target");
+                    Require(callbackInserter.ReplaceCallCount == 0,
+                        "stale emoji commit attempted fixture replacement after focus loss");
+                }
+
+                // A query character after focus loss is also rejected before popup update.
+                writingBox.Focus();
+                writingBox.CaretIndex = writingBox.Text.Length;
+                await Task.Delay(150);
+                var queryFocus = new CountingFocusTracker(tracker);
+                var queryHook = new RegressionKeyboardHook();
+                var queryInserter = new RecordingTextInserter();
+                var queryPopup = new EmojiPopupWindow();
+                using (var queryPicker = new EmojiPickerController(
+                    queryHook, queryFocus, queryInserter, queryPopup, app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance))
+                {
+                    await Task.Run(() => queryHook.Raise(':'));
+                    await Task.Run(() => queryHook.Raise('s'));
+                    await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    searchBox.Focus();
+                    searchBox.CaretIndex = searchBox.Text.Length;
+                    await Task.Delay(150);
+                    int readsBeforeLostCharacter = queryFocus.RefreshCount;
+                    var lostCharacter = await Task.Run(() => queryHook.Raise('m'));
+                    await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    Require(!lostCharacter.Suppress && queryFocus.RefreshCount == readsBeforeLostCharacter + 1,
+                        "active query character did not receive its stale-focus guard");
+                    Require(!queryPopup.IsVisible && queryInserter.ReplaceCallCount == 0,
+                        "stale query character updated the emoji popup or replaced text");
+                }
+
+                // Deterministic race: controller's initial commit check succeeds,
+                // then focus moves after BlockInput is acquired but before the inserter's
+                // final strong-target check. Both controls are fixture-owned; no keys
+                // are injected unless the second guard incorrectly accepts the new target.
+                writingBox.Focus();
+                writingBox.Text = ":smile:";
+                writingBox.CaretIndex = writingBox.Text.Length;
+                raceBox.Text = "race fixture";
+                await Task.Delay(150);
+                using var blockedBeforeFinalCheck = new ManualResetEventSlim(false);
+                var atomicInserter = new SendInputTextInserter(
+                    NullLogger<SendInputTextInserter>.Instance,
+                    () =>
+                    {
+                        app.Dispatcher.Invoke(() =>
+                        {
+                            raceBox.Focus();
+                            raceBox.CaretIndex = raceBox.Text.Length;
+                        });
+                        blockedBeforeFinalCheck.Set();
+                    });
+                var capturedInserter = new CapturingTextInserter(atomicInserter);
+                var raceHook = new RegressionKeyboardHook();
+                using (var racePicker = new EmojiPickerController(
+                    raceHook, tracker, capturedInserter, new EmojiPopupWindow(), app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance))
+                {
+                    await Task.Run(() => raceHook.Raise(':'));
+                    foreach (char c in "smile") await Task.Run(() => raceHook.Raise(c));
+                    var trailingColon = await Task.Run(() => raceHook.Raise(':'));
+                    Require(!trailingColon.Suppress, "emoji commit suppressed its trailing colon");
+                    var replacementTask = await capturedInserter.ReplacementTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    bool replaced = await replacementTask.WaitAsync(TimeSpan.FromSeconds(5));
+                    Require(blockedBeforeFinalCheck.IsSet, "race did not move focus inside the blocked transaction");
+                    await Task.Delay(150);
+                    Require(!replaced && writingBox.Text == ":smile:" && raceBox.Text == "race fixture",
+                        "emoji replacement mutated text after focus moved to another fixture");
+                }
+
+                // Positive fixture-only path proves a successful transaction removes
+                // the trigger and inserts the glyph in one SendInput batch.
+                writingBox.Focus();
+                writingBox.Text = ":smile:";
+                writingBox.CaretIndex = writingBox.Text.Length;
+                await Task.Delay(150);
+                var successfulInserter = new CapturingTextInserter(
+                    new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance));
+                var successfulHook = new RegressionKeyboardHook();
+                using (var successfulPicker = new EmojiPickerController(
+                    successfulHook, tracker, successfulInserter, new EmojiPopupWindow(), app.Dispatcher,
+                    NullLogger<EmojiPickerController>.Instance))
+                {
+                    await Task.Run(() => successfulHook.Raise(':'));
+                    foreach (char c in "smile") await Task.Run(() => successfulHook.Raise(c));
+                    await Task.Run(() => successfulHook.Raise(':'));
+                    var replacementTask = await successfulInserter.ReplacementTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Require(await replacementTask.WaitAsync(TimeSpan.FromSeconds(5)),
+                        "focused fixture emoji replacement transaction was refused");
+                    await Task.Delay(150);
+                    Require(writingBox.Text == "😄",
+                        "atomic fixture replacement did not remove :smile: and insert the glyph");
                 }
                 emojiFixture.Close();
-                Console.WriteLine("EMOJI_FOCUS_LOSS_SEARCH_FIELD_UNCHANGED_NO_STALE_INSERT=PASS");
+                Console.WriteLine("EMOJI_ATOMIC_REPLACEMENT_FOCUS_RACE_AND_FIXTURE_COMMIT=PASS");
                 overlay.Close();
                 result = 0;
             }
@@ -249,29 +360,70 @@ internal static class Program
         public void Stop() { }
         public void Dispose() { }
 
-        public KeyEventArgs Raise(char character)
+        public KeyEventArgs Raise(char character) => Raise(new KeyboardEvent
         {
-            var args = new KeyEventArgs(new KeyboardEvent
-            {
-                Kind = KeyKind.Character,
-                Character = character,
-                HasNonShiftModifier = false,
-                IsKeyDown = true,
-            });
+            Kind = KeyKind.Character,
+            Character = character,
+            HasNonShiftModifier = false,
+            IsKeyDown = true,
+        });
+
+        public KeyEventArgs Raise(KeyboardEvent input)
+        {
+            var args = new KeyEventArgs(input);
             KeyEvent?.Invoke(this, args);
             return args;
         }
     }
 
+    private sealed class CountingFocusTracker(IFocusTracker inner) : IFocusTracker
+    {
+        private int _refreshCount;
+        public int RefreshCount => Volatile.Read(ref _refreshCount);
+        public FocusedField? Current => inner.Current;
+        public event EventHandler<FocusedField?>? FocusChanged
+        {
+            add => inner.FocusChanged += value;
+            remove => inner.FocusChanged -= value;
+        }
+        public FocusedField? Refresh()
+        {
+            Interlocked.Increment(ref _refreshCount);
+            return inner.Refresh();
+        }
+        public void Start() => inner.Start();
+        public void Stop() => inner.Stop();
+        public void Dispose() => inner.Dispose();
+    }
+
     private sealed class RecordingTextInserter : ITextInserter
     {
-        private int _callCount;
-        public int CallCount => Volatile.Read(ref _callCount);
+        private int _replaceCallCount;
+        public int ReplaceCallCount => Volatile.Read(ref _replaceCallCount);
 
-        public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct)
+        public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct) =>
+            Task.FromResult(false);
+
+        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct)
         {
-            Interlocked.Increment(ref _callCount);
+            Interlocked.Increment(ref _replaceCallCount);
             return Task.FromResult(false);
+        }
+    }
+
+    private sealed class CapturingTextInserter(ITextInserter inner) : ITextInserter
+    {
+        public TaskCompletionSource<Task<bool>> ReplacementTask { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<bool> InsertAsync(FocusedField target, string text, CancellationToken ct) =>
+            inner.InsertAsync(target, text, ct);
+
+        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct)
+        {
+            var operation = inner.ReplaceTextAsync(target, charactersToReplace, text, ct);
+            ReplacementTask.TrySetResult(operation);
+            return operation;
         }
     }
 }

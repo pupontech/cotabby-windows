@@ -334,6 +334,9 @@ sealed class RecordingInserter : ITextInserter
         InsertCount++;
         return Task.FromResult(true);
     }
+
+    public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct) =>
+        Task.FromResult(false);
 }
 
 sealed class SingleThreadSyncContext : SynchronizationContext

@@ -156,7 +156,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         try
         {
             var info = element.Current;
-            string? stableFieldIdentity = StableFieldIdentity(element, info);
+            string? stableFieldIdentity = StableFieldIdentity(element, info, out bool hasRuntimeIdIdentity);
             string? automationId = SafeRead(() => info.AutomationId);
             string? name = SafeRead(() => info.Name);
             string? helpText = SafeRead(() => info.HelpText);
@@ -174,7 +174,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             if ((SmarterFieldSuppression && FieldSuppressionPolicy.IsProtectedProcess(TryGetProcessName(info.ProcessId)))
                 || IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
-                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity, hasRuntimeIdIdentity);
                 return true;
             }
 
@@ -195,7 +195,7 @@ public sealed class UiaFocusTracker : IFocusTracker
                     text[..Math.Clamp(caretOffset, 0, text.Length)], controlType == "Edit")))
             {
                 _logger.LogInformation("Protected field left alone; no payload propagated.");
-                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity, hasRuntimeIdIdentity);
                 return true;
             }
 
@@ -206,6 +206,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             {
                 ElementHandle = element,
                 StableFieldIdentity = stableFieldIdentity,
+                HasRuntimeIdIdentity = hasRuntimeIdIdentity,
                 ProcessId = info.ProcessId,
                 ProcessName = TryGetProcessName(info.ProcessId),
                 Text = text,
@@ -236,13 +237,15 @@ public sealed class UiaFocusTracker : IFocusTracker
         AutomationElement element,
         AutomationElement.AutomationElementInformation info,
         bool isPassword,
-        string? stableFieldIdentity)
+        string? stableFieldIdentity,
+        bool hasRuntimeIdIdentity)
     {
         var fieldRect = ToScreenRect(info.BoundingRectangle);
         return new FocusedField
         {
             ElementHandle = element,
             StableFieldIdentity = stableFieldIdentity,
+            HasRuntimeIdIdentity = hasRuntimeIdIdentity,
             ProcessId = info.ProcessId,
             ProcessName = TryGetProcessName(info.ProcessId),
             Text = string.Empty,
@@ -324,7 +327,8 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// </summary>
     private string? StableFieldIdentity(
         AutomationElement element,
-        AutomationElement.AutomationElementInformation info)
+        AutomationElement.AutomationElementInformation info,
+        out bool hasRuntimeIdIdentity)
     {
         int[]? runtimeId;
         try
@@ -336,8 +340,9 @@ public sealed class UiaFocusTracker : IFocusTracker
             runtimeId = null;
         }
 
-        return runtimeId is { Length: > 0 }
-            ? string.Join('.', runtimeId)
+        hasRuntimeIdIdentity = runtimeId is { Length: > 0 };
+        return hasRuntimeIdIdentity
+            ? string.Join('.', runtimeId!)
             : FallbackFieldIdentity(info);
     }
 

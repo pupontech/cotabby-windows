@@ -331,5 +331,8 @@ public sealed class SuggestionPerformanceMetricsTests
             InsertCount++;
             return Task.FromResult(true);
         }
+
+        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct) =>
+            Task.FromResult(false);
     }
 }

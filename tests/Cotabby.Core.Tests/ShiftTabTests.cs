@@ -358,5 +358,8 @@ public sealed class ShiftTabTests
             _focus.ApplyInsertion(text);
             return Task.FromResult(true);
         }
+
+        public Task<bool> ReplaceTextAsync(FocusedField target, int charactersToReplace, string text, CancellationToken ct) =>
+            Task.FromResult(false);
     }
 }
