@@ -395,13 +395,20 @@ internal static class Program
                 // TextPattern content. Reacquire focus and RuntimeId after that read
                 // before SendInput; the host fixture remains otherwise untouched.
                 writingBox.Focus();
-                writingBox.Text = ":smile:";
-                writingBox.CaretIndex = writingBox.Text.Length;
+                writingBox.Text = string.Empty;
+                writingBox.CaretIndex = 0;
                 raceBox.Text = "race fixture";
                 await Task.Delay(150);
                 var contentRaceTarget = await Task.Run(() => tracker.Refresh());
-                Require(contentRaceTarget is { HasRuntimeIdIdentity: true, CaretOffsetIsProven: true },
-                    "content-read race fixture has no proven caret/runtime identity");
+                Require(contentRaceTarget is
+                {
+                    Text.Length: 0,
+                    CaretOffset: 0,
+                    HasRuntimeIdIdentity: true,
+                    CaretOffsetIsProven: true,
+                }, "content-read race did not capture a valid empty pre-trigger target");
+                writingBox.Text = ":smile:";
+                writingBox.CaretIndex = writingBox.Text.Length;
                 int contentReads = 0;
                 int contentRaceDispatches = 0;
                 var contentRaceBlockCalls = new List<(bool Block, bool Result, int ThreadId)>();
@@ -428,23 +435,92 @@ internal static class Program
                         Interlocked.Increment(ref contentRaceDispatches);
                         return count;
                     });
+                const string contentRaceTail = ":smile:";
+                int contentRaceExpectedCaretOffset = contentRaceTarget!.CaretOffset + contentRaceTail.Length;
                 var contentRaceResult = await contentRaceInserter.ReplaceTextAsync(
-                    contentRaceTarget!, 7, "😄", ":smile:", 13, CancellationToken.None);
+                    contentRaceTarget, contentRaceTail.Length, "😄", contentRaceTail,
+                    contentRaceExpectedCaretOffset, CancellationToken.None);
+                await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 Require(contentRaceResult.Status == TextReplacementStatus.Rejected
+                    && Volatile.Read(ref contentReads) == 2
+                    && raceBox.IsKeyboardFocused
                     && contentRaceDispatches == 0
                     && contentRaceBlockCalls.Select(call => call.Block).SequenceEqual(new[] { true, false })
                     && contentRaceBlockCalls.All(call => call.Result)
                     && contentRaceBlockCalls.All(call => call.ThreadId == contentRaceBlockCalls[0].ThreadId)
-                    && writingBox.Text == ":smile:" && raceBox.Text == "race fixture",
-                    "focus change during the post-block content read was not refused before SendInput");
+                    && writingBox.Text == contentRaceTail && raceBox.Text == "race fixture",
+                    "focus change during the second post-block content read was not refused before SendInput");
                 Console.WriteLine("PRODUCTION_EMOJI_POST_CONTENT_READ_FOCUS_REVALIDATION=PASS");
+
+                // These are deliberately expected to fail on Windows until the
+                // production post-content recheck rereads search/credential metadata.
+                bool metadataMutationsRefused = true;
+                foreach (string changedName in new[] { "Search mail", "Email" })
+                {
+                    writingBox.Focus();
+                    System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
+                    writingBox.Text = string.Empty;
+                    writingBox.CaretIndex = 0;
+                    await Task.Delay(150);
+                    var metadataTarget = await Task.Run(() => tracker.Refresh());
+                    Require(metadataTarget is
+                    {
+                        Text.Length: 0,
+                        CaretOffset: 0,
+                        HasRuntimeIdIdentity: true,
+                        CaretOffsetIsProven: true,
+                        IsCredentialField: false,
+                    }, "metadata-race fixture did not capture a safe empty pre-trigger target");
+                    writingBox.Text = contentRaceTail;
+                    writingBox.CaretIndex = writingBox.Text.Length;
+                    string metadataTextBefore = writingBox.Text;
+                    int metadataContentReads = 0;
+                    int metadataDispatches = 0;
+                    var metadataRaceInserter = new SendInputTextInserter(
+                        NullLogger<SendInputTextInserter>.Instance,
+                        () => new BoundedUiaReplacementFocusValidator(() =>
+                        {
+                            if (Interlocked.Increment(ref metadataContentReads) == 2)
+                                app.Dispatcher.Invoke(() =>
+                                    System.Windows.Automation.AutomationProperties.SetName(writingBox, changedName));
+                        }),
+                        _ => true,
+                        (count, _, _) =>
+                        {
+                            Interlocked.Increment(ref metadataDispatches);
+                            return count;
+                        });
+                    int metadataExpectedCaretOffset = metadataTarget!.CaretOffset + contentRaceTail.Length;
+                    var metadataResult = await metadataRaceInserter.ReplaceTextAsync(
+                        metadataTarget, contentRaceTail.Length, "😄", contentRaceTail,
+                        metadataExpectedCaretOffset, CancellationToken.None);
+                    await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    metadataMutationsRefused &= metadataResult.Status == TextReplacementStatus.Rejected
+                        && Volatile.Read(ref metadataContentReads) == 2
+                        && metadataDispatches == 0
+                        && writingBox.Text == metadataTextBefore
+                        && writingBox.IsKeyboardFocused
+                        && System.Windows.Automation.AutomationProperties.GetName(writingBox) == changedName;
+                    System.Windows.Automation.AutomationProperties.SetName(writingBox, "Writing notes");
+                }
+                Require(metadataMutationsRefused,
+                    "post-content validation did not reject Search mail/Email metadata changes after exactly two content reads");
+                Console.WriteLine("PRODUCTION_EMOJI_POST_CONTENT_METADATA_REVALIDATION=PASS");
 
                 // Deterministic focus race: ownership is checked, BlockInput is acquired,
                 // then the final check sees a different fixture RuntimeId.
                 writingBox.Focus();
-                writingBox.Text = ":smile:";
-                writingBox.CaretIndex = writingBox.Text.Length;
-                raceBox.Text = "race fixture";
+                writingBox.Text = string.Empty;
+                writingBox.CaretIndex = 0;
+                await Task.Delay(150);
+                var raceTriggerTarget = await Task.Run(() => tracker.Refresh());
+                Require(raceTriggerTarget is
+                {
+                    Text.Length: 0,
+                    CaretOffset: 0,
+                    HasRuntimeIdIdentity: true,
+                    CaretOffsetIsProven: true,
+                }, "controller focus race did not capture an empty pre-trigger target");
                 await Task.Delay(150);
                 using var blockedBeforeFinalCheck = new ManualResetEventSlim(false);
                 var atomicInserter = new SendInputTextInserter(
@@ -464,23 +540,34 @@ internal static class Program
                     raceHook, tracker, capturedInserter, new EmojiPopupWindow(), app.Dispatcher,
                     NullLogger<EmojiPickerController>.Instance))
                 {
-                    await Task.Run(() => raceHook.Raise(':'));
-                    foreach (char c in "smile") await Task.Run(() => raceHook.Raise(c));
-                    var trailingColon = await Task.Run(() => raceHook.Raise(':'));
+                    await TypeCharacterAsync(raceHook, writingBox, ':');
+                    foreach (char c in "smile") await TypeCharacterAsync(raceHook, writingBox, c);
+                    var trailingColon = await TypeCharacterAsync(raceHook, writingBox, ':');
                     Require(!trailingColon.Suppress, "emoji commit suppressed its trailing colon");
                     var replacementTask = await capturedInserter.ReplacementTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     var replacement = await replacementTask.WaitAsync(TimeSpan.FromSeconds(5));
-                    Require(blockedBeforeFinalCheck.IsSet, "race did not move focus inside the blocked transaction");
+                    Require(blockedBeforeFinalCheck.IsSet && raceBox.IsKeyboardFocused,
+                        "race did not move keyboard focus inside the blocked transaction");
                     await Task.Delay(150);
-                    Require(replacement.Status == TextReplacementStatus.Rejected && writingBox.Text == ":smile:" && raceBox.Text == "race fixture",
+                    Require(replacement.Status == TextReplacementStatus.Rejected
+                        && writingBox.Text == ":smile:" && raceBox.Text == "race fixture",
                         "emoji replacement mutated text after focus moved to another fixture");
                 }
 
                 // Positive fixture-only path proves a successful transaction removes
                 // the trigger and inserts the glyph in one SendInput batch.
                 writingBox.Focus();
-                writingBox.Text = ":smile:";
-                writingBox.CaretIndex = writingBox.Text.Length;
+                writingBox.Text = string.Empty;
+                writingBox.CaretIndex = 0;
+                await Task.Delay(150);
+                var successfulTarget = await Task.Run(() => tracker.Refresh());
+                Require(successfulTarget is
+                {
+                    Text.Length: 0,
+                    CaretOffset: 0,
+                    HasRuntimeIdIdentity: true,
+                    CaretOffsetIsProven: true,
+                }, "positive controller fixture did not capture an empty pre-trigger target");
                 await Task.Delay(150);
                 var successfulInserter = new CapturingTextInserter(
                     new SendInputTextInserter(NullLogger<SendInputTextInserter>.Instance));
@@ -489,16 +576,17 @@ internal static class Program
                     successfulHook, tracker, successfulInserter, new EmojiPopupWindow(), app.Dispatcher,
                     NullLogger<EmojiPickerController>.Instance))
                 {
-                    await Task.Run(() => successfulHook.Raise(':'));
-                    foreach (char c in "smile") await Task.Run(() => successfulHook.Raise(c));
-                    await Task.Run(() => successfulHook.Raise(':'));
+                    await TypeCharacterAsync(successfulHook, writingBox, ':');
+                    foreach (char c in "smile") await TypeCharacterAsync(successfulHook, writingBox, c);
+                    var trailingColon = await TypeCharacterAsync(successfulHook, writingBox, ':');
+                    Require(!trailingColon.Suppress, "positive emoji commit suppressed its trailing colon");
                     var replacementTask = await successfulInserter.ReplacementTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     var result = await replacementTask.WaitAsync(TimeSpan.FromSeconds(5));
                     Require(result.IsComplete,
                         "focused fixture emoji replacement transaction was refused");
                     await Task.Delay(150);
                     Require(writingBox.Text == "😄",
-                        "atomic fixture replacement did not remove :smile: and insert the glyph");
+                        "atomic fixture replacement did not leave exactly the emoji glyph");
                 }
                 emojiFixture.Close();
                 Console.WriteLine("EMOJI_ATOMIC_REPLACEMENT_FOCUS_RACE_AND_FIXTURE_COMMIT=PASS");
@@ -514,6 +602,25 @@ internal static class Program
         };
         app.Run();
         return result;
+    }
+
+    private static async Task<KeyEventArgs> TypeCharacterAsync(
+        RegressionKeyboardHook hook,
+        TextBox textBox,
+        char character)
+    {
+        var args = await Task.Run(() => hook.Raise(character));
+        if (!args.Suppress)
+        {
+            await textBox.Dispatcher.InvokeAsync(() =>
+            {
+                int caret = textBox.CaretIndex;
+                if (caret < 0 || caret > textBox.Text.Length) caret = textBox.Text.Length;
+                textBox.Text = textBox.Text.Insert(caret, character.ToString());
+                textBox.CaretIndex = caret + 1;
+            });
+        }
+        return args;
     }
 
     private static void Require(bool condition, string message)

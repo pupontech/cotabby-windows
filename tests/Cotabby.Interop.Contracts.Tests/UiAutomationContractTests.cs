@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using Cotabby.Win32.Interop;
 
@@ -75,6 +77,80 @@ public sealed class UiAutomationContractTests
     }
 
     [Fact]
+    public void AutomationBaseFocusMethodRetainsItsWindowsSdkSlotAndOutInterfaceContract()
+    {
+        var methods = DeclaredMethods(typeof(IUIAutomation));
+
+        Assert.Equal(55, methods.Length);
+        var getFocusedElement = methods[5];
+        Assert.Equal("GetFocusedElement", getFocusedElement.Name);
+        AssertPreserveSigInt(getFocusedElement);
+        AssertParameter(getFocusedElement, 0, typeof(IUIAutomationElement).MakeByRefType(), isOut: true,
+            UnmanagedType.Interface);
+    }
+
+    [Fact]
+    public void CalledAutomationMethodsRetainTheirSdkSignaturesAndMarshalling()
+    {
+        AssertTimeoutGetter("get_ConnectionTimeout");
+        AssertTimeoutSetter("put_ConnectionTimeout");
+        AssertTimeoutGetter("get_TransactionTimeout");
+        AssertTimeoutSetter("put_TransactionTimeout");
+
+        var getRuntimeId = DeclaredMethod(typeof(IUIAutomationElement), "GetRuntimeId");
+        AssertPreserveSigInt(getRuntimeId);
+        AssertParameter(getRuntimeId, 0, typeof(int[]).MakeByRefType(), isOut: true,
+            UnmanagedType.SafeArray, VarEnum.VT_I4);
+
+        var getCurrentPropertyValue = DeclaredMethod(typeof(IUIAutomationElement), "GetCurrentPropertyValue");
+        AssertPreserveSigInt(getCurrentPropertyValue);
+        AssertParameter(getCurrentPropertyValue, 0, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(getCurrentPropertyValue, 1, typeof(object).MakeByRefType(), isOut: true,
+            UnmanagedType.Struct);
+
+        var getCurrentPattern = DeclaredMethod(typeof(IUIAutomationElement), "GetCurrentPattern");
+        AssertPreserveSigInt(getCurrentPattern);
+        AssertParameter(getCurrentPattern, 0, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(getCurrentPattern, 1, typeof(object).MakeByRefType(), isOut: true,
+            UnmanagedType.Interface);
+    }
+
+    [Fact]
+    public void CalledTextRangeMethodsRetainTheirSdkOrderSignaturesAndPreserveSig()
+    {
+        var textRange = typeof(IUIAutomationTextRange);
+        var methods = DeclaredMethodNames(textRange);
+        Assert.Equal(
+            new[] { "Clone", "CompareEndpoints", "GetText", "MoveEndpointByRange" },
+            new[] { methods[0], methods[2], methods[9], methods[12] });
+
+        var clone = DeclaredMethod(textRange, "Clone");
+        AssertPreserveSigInt(clone);
+        AssertParameter(clone, 0, typeof(IUIAutomationTextRange).MakeByRefType(), isOut: true,
+            UnmanagedType.Interface);
+
+        var compareEndpoints = DeclaredMethod(textRange, "CompareEndpoints");
+        AssertPreserveSigInt(compareEndpoints);
+        AssertParameter(compareEndpoints, 0, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(compareEndpoints, 1, typeof(IUIAutomationTextRange), isOut: false,
+            UnmanagedType.Interface);
+        AssertParameter(compareEndpoints, 2, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(compareEndpoints, 3, typeof(int).MakeByRefType(), isOut: true, marshalAs: null);
+
+        var getText = DeclaredMethod(textRange, "GetText");
+        AssertPreserveSigInt(getText);
+        AssertParameter(getText, 0, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(getText, 1, typeof(string).MakeByRefType(), isOut: true, UnmanagedType.BStr);
+
+        var moveEndpointByRange = DeclaredMethod(textRange, "MoveEndpointByRange");
+        AssertPreserveSigInt(moveEndpointByRange);
+        AssertParameter(moveEndpointByRange, 0, typeof(int), isOut: false, marshalAs: null);
+        AssertParameter(moveEndpointByRange, 1, typeof(IUIAutomationTextRange), isOut: false,
+            UnmanagedType.Interface);
+        AssertParameter(moveEndpointByRange, 2, typeof(int), isOut: false, marshalAs: null);
+    }
+
+    [Fact]
     public void TextPatternSelectionReturnsTheSdkArrayInterfaceNotASafeArray()
     {
         Type? rangeArrayType = typeof(IUIAutomationTextPattern).Assembly
@@ -103,9 +179,75 @@ public sealed class UiAutomationContractTests
         Assert.Equal(UnmanagedType.Interface, parameter.GetCustomAttribute<MarshalAsAttribute>()?.Value);
     }
 
-    private static string[] DeclaredMethodNames(Type interfaceType) => interfaceType
-        .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
-        .OrderBy(method => method.MetadataToken)
+    private static string[] DeclaredMethodNames(Type interfaceType) => DeclaredMethods(interfaceType)
         .Select(method => method.Name)
         .ToArray();
+
+    private static MethodInfo[] DeclaredMethods(Type interfaceType) => interfaceType
+        .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+        .OrderBy(method => method.MetadataToken)
+        .ToArray();
+
+    private static MethodInfo DeclaredMethod(Type interfaceType, string methodName) =>
+        Assert.Single(DeclaredMethods(interfaceType), method => method.Name == methodName);
+
+    private static void AssertPreserveSigInt(MethodInfo method)
+    {
+        Assert.Equal(typeof(int), method.ReturnType);
+        Assert.NotNull(method.GetCustomAttribute<PreserveSigAttribute>());
+    }
+
+    private static void AssertTimeoutGetter(string methodName)
+    {
+        var method = DeclaredMethod(typeof(IUIAutomation2), methodName);
+        AssertPreserveSigInt(method);
+        AssertParameter(method, 0, typeof(uint).MakeByRefType(), isOut: true, marshalAs: null);
+    }
+
+    private static void AssertTimeoutSetter(string methodName)
+    {
+        var method = DeclaredMethod(typeof(IUIAutomation2), methodName);
+        AssertPreserveSigInt(method);
+        AssertParameter(method, 0, typeof(uint), isOut: false, marshalAs: null);
+    }
+
+    private static void AssertParameter(
+        MethodInfo method,
+        int index,
+        Type expectedType,
+        bool isOut,
+        UnmanagedType? marshalAs,
+        VarEnum? safeArraySubType = null)
+    {
+        var parameter = method.GetParameters()[index];
+        Assert.Equal(expectedType, parameter.ParameterType);
+        Assert.Equal(isOut, parameter.IsOut);
+        var marshalAttribute = parameter.GetCustomAttribute<MarshalAsAttribute>();
+        Assert.Equal(marshalAs, marshalAttribute?.Value);
+        if (safeArraySubType is not null)
+        {
+            Assert.Equal(
+                new[] { (byte)UnmanagedType.SafeArray, (byte)safeArraySubType.Value },
+                GetMarshallingDescriptor(method, index));
+        }
+    }
+
+    private static byte[] GetMarshallingDescriptor(MethodInfo method, int parameterIndex)
+    {
+        using var stream = File.OpenRead(method.Module.Assembly.Location);
+        using var peReader = new PEReader(stream);
+        MetadataReader metadata = peReader.GetMetadataReader();
+        var typeHandle = metadata.TypeDefinitions.Single(handle =>
+        {
+            var definition = metadata.GetTypeDefinition(handle);
+            return metadata.GetString(definition.Namespace) == method.DeclaringType!.Namespace
+                && metadata.GetString(definition.Name) == method.DeclaringType.Name;
+        });
+        var methodHandle = metadata.GetTypeDefinition(typeHandle).GetMethods().Single(handle =>
+            metadata.GetString(metadata.GetMethodDefinition(handle).Name) == method.Name);
+        var parameterHandle = metadata.GetMethodDefinition(methodHandle).GetParameters().Single(handle =>
+            metadata.GetParameter(handle).SequenceNumber == parameterIndex + 1);
+        var descriptor = metadata.GetParameter(parameterHandle).GetMarshallingDescriptor();
+        return metadata.GetBlobBytes(descriptor);
+    }
 }
