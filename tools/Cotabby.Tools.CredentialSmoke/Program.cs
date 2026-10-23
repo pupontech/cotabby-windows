@@ -5,8 +5,8 @@
 // synthetic fixture process that the production UiaFocusTracker.Refresh()
 // refuses to read payload text out of recognized credential fields (username,
 // verification code, card number, password flag) BEFORE any payload read
-// happens, while ordinary writing / email subject / email search / multiline
-// email body fields stay available for suggestions.
+// happens, while ordinary writing / email subject / multiline email body fields
+// stay available. Search fields are intentionally unsupported with zero reads.
 //
 // Every payload in this tool is dummy data. Payload text is never printed:
 // output is limited to case ids, read counters and PASS/FAIL.
@@ -329,6 +329,23 @@ internal static class Program
                     }
 
                     return Pass(fixtureCase, "available", readsAfterRefresh, negativeControlLine);
+                }
+
+                case FixtureExpectation.RejectSearch:
+                {
+                    if (snapshot is not null || readsAfterRefresh != 0)
+                        return Fail(fixtureCase, "search-payload", readsAfterRefresh, "search must yield no snapshot or value reads");
+                    var focused = TryGetFocusedElement();
+                    if (focused is null || focused.Current.ProcessId != child.Id
+                        || !MetadataMatches(focused, fixtureCase, out _))
+                        return Harness(fixtureCase, child, "search fixture lost its proven focus identity");
+                    // A readable provider with stable focused metadata rules out
+                    // a generic unsupported/unavailable fixture as the zero-read cause.
+                    var probe = TryReadValuePattern(focused);
+                    if (!string.Equals(probe, fixtureCase.Payload, StringComparison.Ordinal)
+                        || !TryReadCounters(statsPath, out var controlReads, out _) || controlReads <= readsAfterRefresh)
+                        return Harness(fixtureCase, child, "search eligibility control did not read the payload");
+                    return Pass(fixtureCase, "search-no-snapshot", readsAfterRefresh, negativeControlLine);
                 }
 
                 case FixtureExpectation.Reject:
@@ -1075,6 +1092,7 @@ internal enum FixtureExpectation
     Allow,
     Reject,
     RejectAfterBoundedRead,
+    RejectSearch,
 }
 
 internal sealed record FixtureCase(
@@ -1092,6 +1110,7 @@ internal sealed record FixtureCase(
     {
         FixtureExpectation.Allow => "allow",
         FixtureExpectation.Reject => "reject",
+        FixtureExpectation.RejectSearch => "search-reject",
         _ => "bounded-reject",
     };
 }
@@ -1108,8 +1127,8 @@ internal static class FixtureCases
 
     public static readonly FixtureCase[] All =
     {
-        // Ordinary fields stay available for suggestions (spec: ordinary
-        // writing, email subject, search email, document email body).
+        // Ordinary writing, email subject and document email body stay available.
+        // Search has its own expectation; it is unsupported, not a credential.
         new("ordinary-notes", "fixture-notes-field", "Edit", "Notes", null, false,
             "Dear team, the draft plan is ready for review.",
             FixtureExpectation.Allow, RunNegativeControl: true),
@@ -1120,7 +1139,7 @@ internal static class FixtureCases
 
         new("search-email", "emailSearch", "Edit", "Search email", null, false,
             "quarterly report attachments",
-            FixtureExpectation.Allow),
+            FixtureExpectation.RejectSearch),
 
         // Multiline document: an email body, never a credential field.
         new("document-email-body", "fixture-email-body", "Document", "Email", null, false,

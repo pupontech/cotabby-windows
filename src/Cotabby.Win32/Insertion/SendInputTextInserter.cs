@@ -38,8 +38,122 @@ public sealed class SendInputTextInserter : ITextInserter
 {
     private readonly ILogger<SendInputTextInserter> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Action? _afterInputBlockedForTesting;
+    private readonly Func<IEmojiReplacementFocusValidator> _focusValidatorFactory;
+    private readonly Func<bool, bool> _blockInput;
+    private readonly Func<uint, INPUT[], int, uint> _sendInput;
 
-    public SendInputTextInserter(ILogger<SendInputTextInserter> logger) => _logger = logger;
+    public SendInputTextInserter(ILogger<SendInputTextInserter> logger)
+        : this(logger, () => new BoundedUiaReplacementFocusValidator(), BlockInput, SendInput, null)
+    {
+    }
+
+    internal SendInputTextInserter(
+        ILogger<SendInputTextInserter> logger,
+        Action afterInputBlockedForTesting)
+        : this(logger, () => new BoundedUiaReplacementFocusValidator(), BlockInput, SendInput,
+            afterInputBlockedForTesting)
+    {
+    }
+
+    internal SendInputTextInserter(
+        ILogger<SendInputTextInserter> logger,
+        Func<IEmojiReplacementFocusValidator> focusValidatorFactory,
+        Func<bool, bool> blockInput,
+        Func<uint, INPUT[], int, uint> sendInput,
+        Action? afterInputBlockedForTesting = null)
+    {
+        _logger = logger;
+        _focusValidatorFactory = focusValidatorFactory;
+        _blockInput = blockInput;
+        _sendInput = sendInput;
+        _afterInputBlockedForTesting = afterInputBlockedForTesting;
+    }
+
+    /// <summary>
+    /// Replace trailing text and its replacement in one native input transaction.
+    /// The final UIA/foreground check occurs after input blocking and immediately
+    /// before the single SendInput call.
+    /// </summary>
+    public async Task<TextReplacementResult> ReplaceTextAsync(
+        FocusedField target,
+        int charactersToReplace,
+        string text,
+        string expectedTail,
+        int expectedCaretOffset,
+        CancellationToken ct)
+    {
+        if (charactersToReplace < 0 || charactersToReplace != expectedTail.Length
+            || (charactersToReplace == 0 && text.Length == 0))
+            return TextReplacementResult.Rejected;
+        if (target.IsCredentialField || target.IsSecure || !target.HasRuntimeIdIdentity
+            || string.IsNullOrWhiteSpace(target.StableFieldIdentity))
+            return TextReplacementResult.Rejected;
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            return await OnStaThreadAsync(() =>
+                ReplaceOnStaThread(target, charactersToReplace, text, expectedTail, expectedCaretOffset, ct))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private TextReplacementResult ReplaceOnStaThread(
+        FocusedField target,
+        int charactersToReplace,
+        string text,
+        string expectedTail,
+        int expectedCaretOffset,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        IEmojiReplacementFocusValidator validator;
+        try { validator = _focusValidatorFactory(); }
+        catch (Exception) { return TextReplacementResult.Rejected; }
+
+        using (validator)
+        {
+            if (!ValidateReplacement(validator, target, expectedTail, expectedCaretOffset))
+                return TextReplacementResult.Rejected;
+
+            if (!_blockInput(true)) return TextReplacementResult.Rejected;
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                _afterInputBlockedForTesting?.Invoke();
+                if (!ValidateReplacement(validator, target, expectedTail, expectedCaretOffset))
+                    return TextReplacementResult.Rejected;
+
+                // No await or UIA callback after the final ownership/content check.
+                return SendUnicodeReplacement(charactersToReplace, text);
+            }
+            finally
+            {
+                if (!_blockInput(false))
+                    _logger.LogWarning("BlockInput(false) failed after emoji replacement attempt.");
+            }
+        }
+    }
+
+    private bool ValidateReplacement(
+        IEmojiReplacementFocusValidator validator,
+        FocusedField target,
+        string expectedTail,
+        int expectedCaretOffset)
+    {
+        try { return validator.Matches(target, expectedTail, expectedCaretOffset); }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Bounded emoji focus validation refused ({ExceptionType}).", ex.GetType().Name);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Chunks at or below this length go through a single SendInput unicode
@@ -116,7 +230,8 @@ public sealed class SendInputTextInserter : ITextInserter
             if (!TargetStillFocused(target)) return false;
             // Block, inject and unblock on ONE native thread. An await here can
             // move injection to a thread whose input Windows is still blocking.
-            bool blocked = BlockInput(true);
+            bool blocked = _blockInput(true);
+            if (!blocked) return false;
             try
             {
                 bool sent = SendCtrlV();
@@ -127,7 +242,8 @@ public sealed class SendInputTextInserter : ITextInserter
             }
             finally
             {
-                if (blocked) BlockInput(false);
+                if (!_blockInput(false))
+                    _logger.LogWarning("BlockInput(false) failed after clipboard paste.");
             }
         }
         finally
@@ -150,9 +266,11 @@ public sealed class SendInputTextInserter : ITextInserter
 
     // Runs off the WPF dispatcher: querying UIA in-process from the UI thread
     // can deadlock. Do not trust a snapshot across the semaphore/clipboard waits.
-    private static bool TargetStillFocused(FocusedField target)
+    private static bool TargetStillFocused(FocusedField target, bool requireRuntimeIdIdentity = false)
     {
         if (target.IsCredentialField || target.IsSecure
+            || (requireRuntimeIdIdentity && (!target.HasRuntimeIdIdentity
+                || string.IsNullOrWhiteSpace(target.StableFieldIdentity)))
             || target.ElementHandle is not AutomationElement expected) return false;
         try
         {
@@ -160,6 +278,13 @@ public sealed class SendInputTextInserter : ITextInserter
             if (current is null || current.Current.ProcessId != target.ProcessId
                 || current.Current.IsPassword || !current.Current.HasKeyboardFocus
                 || !Automation.Compare(expected, current)) return false;
+            if (requireRuntimeIdIdentity)
+            {
+                int[]? runtimeId = current.GetRuntimeId();
+                if (runtimeId is not { Length: > 0 }
+                    || !string.Equals(string.Join('.', runtimeId), target.StableFieldIdentity, StringComparison.Ordinal))
+                    return false;
+            }
             var foreground = GetForegroundWindow();
             GetWindowThreadProcessId(foreground, out uint pid);
             return foreground != IntPtr.Zero && pid == target.ProcessId;
@@ -202,13 +327,14 @@ public sealed class SendInputTextInserter : ITextInserter
 
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
+    private const ushort VK_BACK = 0x08;
 
     /// <summary>
     /// Send Ctrl-down, V-down, V-up, Ctrl-up via SendInput. We use regular
     /// virtual-key SendInput rather than KEYEVENTF_UNICODE because Ctrl+V is
     /// a virtual-key shortcut, not a character.
     /// </summary>
-    private static bool SendCtrlV()
+    private bool SendCtrlV()
     {
         var inputs = new INPUT[]
         {
@@ -217,7 +343,7 @@ public sealed class SendInputTextInserter : ITextInserter
             MakeVkInput(VK_V,       keyUp: true),
             MakeVkInput(VK_CONTROL, keyUp: true),
         };
-        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
+        return SendInputCount(inputs) == (uint)inputs.Length;
     }
 
     /// <summary>
@@ -225,7 +351,7 @@ public sealed class SendInputTextInserter : ITextInserter
     /// KEYEVENTF_UNICODE down/up pairs. UTF-16 code units go through as-is,
     /// so surrogate pairs (emoji) arrive intact.
     /// </summary>
-    private static bool SendUnicodeString(string text)
+    private bool SendUnicodeString(string text)
     {
         var inputs = new INPUT[text.Length * 2];
         for (int i = 0; i < text.Length; i++)
@@ -233,8 +359,43 @@ public sealed class SendInputTextInserter : ITextInserter
             inputs[i * 2] = MakeUnicodeInput(text[i], keyUp: false);
             inputs[i * 2 + 1] = MakeUnicodeInput(text[i], keyUp: true);
         }
-        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == (uint)inputs.Length;
+        return SendInputCount(inputs) == (uint)inputs.Length;
     }
+
+    /// <summary>Send the replacement and report short dispatches without claiming atomicity.</summary>
+    private TextReplacementResult SendUnicodeReplacement(int charactersToReplace, string text)
+    {
+        var inputs = new INPUT[checked((charactersToReplace + text.Length) * 2)];
+        for (int i = 0; i < charactersToReplace; i++)
+        {
+            inputs[i * 2] = MakeVkInput(VK_BACK, keyUp: false);
+            inputs[i * 2 + 1] = MakeVkInput(VK_BACK, keyUp: true);
+        }
+        for (int i = 0; i < text.Length; i++)
+        {
+            int offset = (charactersToReplace + i) * 2;
+            inputs[offset] = MakeUnicodeInput(text[i], keyUp: false);
+            inputs[offset + 1] = MakeUnicodeInput(text[i], keyUp: true);
+        }
+
+        uint inserted = SendInputCount(inputs);
+        bool keyReleaseRecovered = false;
+        if (inserted > 0 && inserted < (uint)inputs.Length && (inserted & 1) != 0)
+        {
+            // SendInput inserts a prefix. If it stopped after a key-down, try
+            // exactly that event's matching key-up while input is still blocked.
+            var recovery = new[] { inputs[inserted] };
+            keyReleaseRecovered = SendInputCount(recovery) == 1;
+            if (!keyReleaseRecovered)
+                _logger.LogWarning("Short replacement input left a key-up recovery attempt unsuccessful.");
+        }
+
+        return TextReplacementResult.FromSendInput(
+            (uint)inputs.Length, inserted, keyReleaseRecovered);
+    }
+
+    private uint SendInputCount(INPUT[] inputs) =>
+        _sendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
 
     private static INPUT MakeUnicodeInput(char c, bool keyUp) => new()
     {

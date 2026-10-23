@@ -37,7 +37,7 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// <summary>Opt-in process defaults and transient neutral-field back-off.</summary>
     public bool SmarterFieldSuppression { get; set; }
 
-    public FocusedField? Current => _fakeField ?? Volatile.Read(ref _current);
+    public FocusedField? Current => Volatile.Read(ref _fakeField) ?? Volatile.Read(ref _current);
 
     public event EventHandler<FocusedField?>? FocusChanged;
 
@@ -51,7 +51,7 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// </summary>
     public void SetFakeFieldForTesting(FocusedField? fake)
     {
-        _fakeField = fake;
+        Volatile.Write(ref _fakeField, fake);
         FocusChanged?.Invoke(this, fake);
     }
 
@@ -70,7 +70,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // Seed the current snapshot so consumers calling Current right after
             // Start don't see null until the first focus change.
             TryCaptureFocused(out var initial);
-            _current = initial;
+            Volatile.Write(ref _current, initial);
         }
     }
 
@@ -86,16 +86,16 @@ public sealed class UiaFocusTracker : IFocusTracker
                 catch (Exception ex) { _logger.LogWarning(ex, "RemoveAutomationFocusChangedEventHandler threw."); }
                 _handler = null;
             }
-            _current = null;
+            Volatile.Write(ref _current, null);
             _logger.LogInformation("UIA focus tracker stopped.");
         }
     }
 
     public FocusedField? Refresh()
     {
-        if (_fakeField is not null) return _fakeField;
+        if (Volatile.Read(ref _fakeField) is { } fake) return fake;
         TryCaptureFocused(out var snap);
-        _current = snap;
+        Volatile.Write(ref _current, snap);
         return snap;
     }
 
@@ -118,7 +118,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             if (snap is null)
             {
                 AdvanceFocusPartition(0, 0, 0, 0, 0);
-                _current = null;
+                Volatile.Write(ref _current, null);
                 FocusChanged?.Invoke(this, null);
                 return;
             }
@@ -127,7 +127,7 @@ public sealed class UiaFocusTracker : IFocusTracker
             // We don't have a stable element identity through ElementHandle since
             // UIA's RuntimeId is a managed int[] and equality isn't trivial across
             // events. Treat every focus event as a state change — cheap enough.
-            _current = snap;
+            Volatile.Write(ref _current, snap);
             AdvanceFocusPartition(snap.ProcessId, snap.FieldRect.X, snap.FieldRect.Y,
                 snap.FieldRect.Width, snap.FieldRect.Height);
             FocusChanged?.Invoke(this, snap);
@@ -156,7 +156,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         try
         {
             var info = element.Current;
-            string? stableFieldIdentity = StableFieldIdentity(element, info);
+            string? stableFieldIdentity = StableFieldIdentity(element, info, out bool hasRuntimeIdIdentity);
             string? automationId = SafeRead(() => info.AutomationId);
             string? name = SafeRead(() => info.Name);
             string? helpText = SafeRead(() => info.HelpText);
@@ -174,9 +174,14 @@ public sealed class UiaFocusTracker : IFocusTracker
             if ((SmarterFieldSuppression && FieldSuppressionPolicy.IsProtectedProcess(TryGetProcessName(info.ProcessId)))
                 || IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text: null))
             {
-                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity, hasRuntimeIdIdentity);
                 return true;
             }
+
+            // A search query belongs to the host, not the completion engine. Like
+            // other unsupported fields, publish no snapshot and never read its value.
+            if (SearchFieldDetector.IsSearchField(controlType, Labels(name, helpText, labeledByName), automationId))
+                return false;
 
             if (!IsEditableField(element, info)) return false;
 
@@ -184,13 +189,13 @@ public sealed class UiaFocusTracker : IFocusTracker
             // for the address-shape fallback (it also produces the completion
             // prefix). If it reveals a credential, the text must not travel any
             // further — the returned snapshot carries no text.
-            var (text, caretOffset) = ReadTextAndCaret(element);
+            var (text, caretOffset, caretOffsetIsProven) = ReadTextAndCaret(element);
             if (IsCredentialBlocked(controlType, name, helpText, labeledByName, automationId, isPassword, text)
                 || (SmarterFieldSuppression && FieldSuppressionPolicy.ShouldBackOff(
                     text[..Math.Clamp(caretOffset, 0, text.Length)], controlType == "Edit")))
             {
                 _logger.LogInformation("Protected field left alone; no payload propagated.");
-                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity);
+                snapshot = BlockedSnapshot(element, info, isPassword, stableFieldIdentity, hasRuntimeIdIdentity);
                 return true;
             }
 
@@ -201,10 +206,12 @@ public sealed class UiaFocusTracker : IFocusTracker
             {
                 ElementHandle = element,
                 StableFieldIdentity = stableFieldIdentity,
+                HasRuntimeIdIdentity = hasRuntimeIdIdentity,
                 ProcessId = info.ProcessId,
                 ProcessName = TryGetProcessName(info.ProcessId),
                 Text = text,
                 CaretOffset = caretOffset,
+                CaretOffsetIsProven = caretOffsetIsProven,
                 CaretRect = caretRect.IsEmpty ? fieldRect : caretRect,
                 FieldRect = fieldRect,
                 IsSingleLine = controlType == "Edit",
@@ -231,13 +238,15 @@ public sealed class UiaFocusTracker : IFocusTracker
         AutomationElement element,
         AutomationElement.AutomationElementInformation info,
         bool isPassword,
-        string? stableFieldIdentity)
+        string? stableFieldIdentity,
+        bool hasRuntimeIdIdentity)
     {
         var fieldRect = ToScreenRect(info.BoundingRectangle);
         return new FocusedField
         {
             ElementHandle = element,
             StableFieldIdentity = stableFieldIdentity,
+            HasRuntimeIdIdentity = hasRuntimeIdIdentity,
             ProcessId = info.ProcessId,
             ProcessName = TryGetProcessName(info.ProcessId),
             Text = string.Empty,
@@ -319,7 +328,8 @@ public sealed class UiaFocusTracker : IFocusTracker
     /// </summary>
     private string? StableFieldIdentity(
         AutomationElement element,
-        AutomationElement.AutomationElementInformation info)
+        AutomationElement.AutomationElementInformation info,
+        out bool hasRuntimeIdIdentity)
     {
         int[]? runtimeId;
         try
@@ -331,8 +341,9 @@ public sealed class UiaFocusTracker : IFocusTracker
             runtimeId = null;
         }
 
-        return runtimeId is { Length: > 0 }
-            ? string.Join('.', runtimeId)
+        hasRuntimeIdIdentity = runtimeId is { Length: > 0 };
+        return hasRuntimeIdIdentity
+            ? string.Join('.', runtimeId!)
             : FallbackFieldIdentity(info);
     }
 
@@ -478,7 +489,7 @@ public sealed class UiaFocusTracker : IFocusTracker
         catch (Exception) { return false; }
     }
 
-    private (string text, int caretOffset) ReadTextAndCaret(AutomationElement element)
+    private (string text, int caretOffset, bool caretOffsetIsProven) ReadTextAndCaret(AutomationElement element)
     {
         // Prefer TextPattern: it gives both full text and the caret-as-selection.
         if (element.TryGetCurrentPattern(TextPattern.Pattern, out var rawText)
@@ -489,16 +500,19 @@ public sealed class UiaFocusTracker : IFocusTracker
                 // Cap to 16KB — coordinators only need a window around the caret.
                 string full = textPattern.DocumentRange.GetText(16 * 1024);
                 int caret = 0;
+                bool caretIsProven = false;
                 var sel = textPattern.GetSelection();
                 if (sel is { Length: > 0 })
                 {
                     var range = sel[0];
+                    caretIsProven = range.CompareEndpoints(
+                        TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End) == 0;
                     var preCaret = textPattern.DocumentRange.Clone();
                     preCaret.MoveEndpointByRange(
                         TextPatternRangeEndpoint.End, range, TextPatternRangeEndpoint.Start);
                     caret = preCaret.GetText(16 * 1024).Length;
                 }
-                return (full, caret);
+                return (full, caret, caretIsProven);
             }
             catch (Exception) { /* fall through */ }
         }
@@ -507,10 +521,10 @@ public sealed class UiaFocusTracker : IFocusTracker
             && rawValue is ValuePattern vp)
         {
             string v = vp.Current.Value ?? string.Empty;
-            return (v, v.Length); // caret at end as a fallback
+            return (v, v.Length, false); // ValuePattern has no caret; retain this only as a suggestion fallback.
         }
 
-        return (string.Empty, 0);
+        return (string.Empty, 0, false);
     }
 
     private ScreenRect ReadCaretRect(AutomationElement element)

@@ -629,6 +629,10 @@ internal static class Program
             }
         }
 
+        public Task<TextReplacementResult> ReplaceTextAsync(
+            FocusedField target, int charactersToReplace, string text, string expectedTail, int expectedCaretOffset, CancellationToken ct) =>
+            Task.FromResult(TextReplacementResult.Rejected);
+
         private void SetViolation(string violation)
         {
             lock (_gate) _violation ??= violation;

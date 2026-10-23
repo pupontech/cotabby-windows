@@ -14,8 +14,12 @@ public sealed record FocusedField
     /// <summary>Opaque, platform-specific element identity (UIA cache request, AX ref, …).</summary>
     public required object ElementHandle { get; init; }
 
-    /// <summary>Stable cross-snapshot identity for this field, or null when the platform cannot prove one.</summary>
+    /// <summary>Cross-snapshot identity token; use <see cref="HasRuntimeIdIdentity"/> to know if it is strong.</summary>
     public string? StableFieldIdentity { get; init; }
+
+    /// <summary>True only when a non-empty UIA RuntimeId proves this field's identity.</summary>
+    /// <remarks>Descriptor fallbacks remain available to ordinary suggestion callers but are never strong identity.</remarks>
+    public bool HasRuntimeIdIdentity { get; init; }
 
     /// <summary>Process id of the host app. Used for app-specific behavior toggles.</summary>
     public required int ProcessId { get; init; }
@@ -28,6 +32,10 @@ public sealed record FocusedField
 
     /// <summary>Caret position as a UTF-16 offset into <see cref="Text"/>.</summary>
     public required int CaretOffset { get; init; }
+
+    /// <summary>True only when the platform read an actual caret/selection, not an inferred end-of-value position.</summary>
+    /// <remarks>False by default so destructive emoji replacement fails closed; ordinary suggestion snapshots may still use inferred offsets.</remarks>
+    public bool CaretOffsetIsProven { get; init; }
 
     /// <summary>Caret screen rectangle in physical pixels (DPI-aware).</summary>
     public required ScreenRect CaretRect { get; init; }

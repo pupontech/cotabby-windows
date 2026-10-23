@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cotabby.Tools.CoordinatorSm
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cotabby.Win32.Tests", "tests\Cotabby.Win32.Tests\Cotabby.Win32.Tests.csproj", "{B020F5F5-C65E-498D-940C-6587571F275B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cotabby.Interop.Contracts.Tests", "tests\Cotabby.Interop.Contracts.Tests\Cotabby.Interop.Contracts.Tests.csproj", "{09D49410-EAAD-4D91-A045-BF81D3CF1268}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -145,6 +147,18 @@ Global
 		{B020F5F5-C65E-498D-940C-6587571F275B}.Release|x64.Build.0 = Release|Any CPU
 		{B020F5F5-C65E-498D-940C-6587571F275B}.Release|x86.ActiveCfg = Release|Any CPU
 		{B020F5F5-C65E-498D-940C-6587571F275B}.Release|x86.Build.0 = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|x64.Build.0 = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Debug|x86.Build.0 = Debug|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|Any CPU.Build.0 = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|x64.ActiveCfg = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|x64.Build.0 = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|x86.ActiveCfg = Release|Any CPU
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -159,5 +173,6 @@ Global
 		{E4E2ACCA-5674-4AF1-8091-C0EC72290146} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{4E022224-DD3D-4ED9-ADF1-816AABC50746} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{B020F5F5-C65E-498D-940C-6587571F275B} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{09D49410-EAAD-4D91-A045-BF81D3CF1268} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

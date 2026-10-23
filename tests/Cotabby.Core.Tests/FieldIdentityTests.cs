@@ -48,6 +48,17 @@ public sealed class FieldIdentityTests
     }
 
     [Fact]
+    public async Task DoubleTapStillWorksWithDescriptorOnlyFallbackIdentity()
+    {
+        await using var rig = await Rig.CreateAsync(
+            doubleTapEnabled: true,
+            identity: "ct=Edit|aid=|nm=|hwnd=123|pid=42|gen=0");
+
+        Assert.True(rig.Hook.Emit(Tab()));
+        Assert.Equal(new[] { "world" }, rig.Inserter.Inserted);
+    }
+
+    [Fact]
     public async Task EmptyFieldIdentityIsTreatedAsUnprovenRatherThanUnowned()
     {
         await using var rig = await Rig.CreateAsync(doubleTapEnabled: true, identity: string.Empty);
@@ -388,5 +399,9 @@ public sealed class FieldIdentityTests
             _focus.ApplyInsertion(text);
             return Task.FromResult(true);
         }
+
+        public Task<TextReplacementResult> ReplaceTextAsync(
+            FocusedField target, int charactersToReplace, string text, string expectedTail, int expectedCaretOffset, CancellationToken ct) =>
+            Task.FromResult(TextReplacementResult.Rejected);
     }
 }

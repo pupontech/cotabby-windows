@@ -1,3 +1,5 @@
+using Cotabby.Core.Emoji;
+using Cotabby.Core.Focus;
 using Cotabby.Win32.Focus;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -45,6 +47,53 @@ public sealed class FieldIdentityCollisionTests
 
         Assert.Equal(first, second);
     }
+
+    [Fact]
+    public void RepeatedFallbackReadsAtSameRoundedBoundsStayStableForOtherCallers()
+    {
+        using var tracker = new UiaFocusTracker(NullLogger<UiaFocusTracker>.Instance);
+        tracker.AdvanceFocusPartition(42, 10.2, 20.2, 200, 24);
+        string first = tracker.FallbackIdentityFromDescriptor(AnonymousEdit);
+
+        // A second anonymous field with identical metadata and geometry collides
+        // by design; emoji safety must come from the explicit RuntimeId-strength flag.
+        tracker.AdvanceFocusPartition(42, 10.4, 20.4, 200, 24);
+        string second = tracker.FallbackIdentityFromDescriptor(AnonymousEdit);
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void IdenticalFallbackFieldsAtSameRoundedBoundsAreNotAnEmojiTarget()
+    {
+        using var tracker = new UiaFocusTracker(NullLogger<UiaFocusTracker>.Instance);
+        tracker.AdvanceFocusPartition(42, 10.2, 20.2, 200, 24);
+        string firstIdentity = tracker.FallbackIdentityFromDescriptor(AnonymousEdit);
+        tracker.AdvanceFocusPartition(42, 10.4, 20.4, 200, 24);
+        string secondIdentity = tracker.FallbackIdentityFromDescriptor(AnonymousEdit);
+        var first = Field(firstIdentity);
+        var second = Field(secondIdentity);
+
+        Assert.Equal(first.StableFieldIdentity, second.StableFieldIdentity);
+        Assert.Equal(first.FieldRect, second.FieldRect);
+        Assert.False(EmojiFocusPolicy.SameUsableTarget(first, second));
+    }
+
+    private static FocusedField Field(string identity) => new()
+    {
+        ElementHandle = new object(),
+        StableFieldIdentity = identity,
+        HasRuntimeIdIdentity = false,
+        ProcessId = 42,
+        ProcessName = "fixture",
+        Text = string.Empty,
+        CaretOffset = 0,
+        CaretRect = ScreenRect.Empty,
+        FieldRect = new ScreenRect(10.2, 20.2, 200, 24),
+        IsSingleLine = true,
+        IsSecure = false,
+        IsCredentialField = false,
+    };
 
     [Fact]
     public void DistinctDescriptorsRemainDistinct()

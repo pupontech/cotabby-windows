@@ -667,9 +667,9 @@ public sealed class SuggestionCoordinator : IAsyncDisposable
                         // Revalidate the target before presenting the old field's
                         // completion, not only later when the user accepts it.
                         var live = _focus.Refresh();
-                        if (live is { } focused
-                            && (focused.IsCredentialField || focused.ProcessId != field.ProcessId
-                                || !FieldIdentityProvesOwnership(focused.StableFieldIdentity, field.StableFieldIdentity)))
+                        if (live is null
+                            || live.IsSecure || live.IsCredentialField || live.ProcessId != field.ProcessId
+                            || !FieldIdentityProvesOwnership(live.StableFieldIdentity, field.StableFieldIdentity))
                         {
                             CancelSession("focus changed before presentation");
                             return;

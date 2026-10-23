@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Cotabby.Win32.Tests" />
+    <InternalsVisibleTo Include="Cotabby.Tools.RegressionSmoke" />
   </ItemGroup>
 
 </Project>
