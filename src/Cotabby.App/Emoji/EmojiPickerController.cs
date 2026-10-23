@@ -39,6 +39,8 @@ public sealed class EmojiPickerController : IDisposable
     private List<EmojiEntry> _matches = new();
     private int _selected;
     private FocusedField? _triggerField;
+    private long _focusGeneration;
+    private long _triggerFocusGeneration;
 
     public bool Enabled { get; set; } = true;
 
@@ -56,12 +58,15 @@ public sealed class EmojiPickerController : IDisposable
         _popup = popup;
         _dispatcher = dispatcher;
         _logger = logger;
+        _focus.FocusChanged += OnFocusChanged;
         _hook.KeyEvent += OnKeyEvent;
     }
 
     public void Dispose()
     {
+        _focus.FocusChanged -= OnFocusChanged;
         _hook.KeyEvent -= OnKeyEvent;
+        Interlocked.Increment(ref _focusGeneration);
         _dispatcher.BeginInvoke(() => _popup.Hide());
     }
 
@@ -72,15 +77,31 @@ public sealed class EmojiPickerController : IDisposable
         var input = args.Event;
         bool refreshFocus = EmojiFocusPolicy.RequiresFreshFocus(input);
 
+        // UIA focus notifications arrive off the hook thread. If one invalidated
+        // the active target, reset here before processing the next key event.
+        if (_state.IsActive && _triggerFocusGeneration != Volatile.Read(ref _focusGeneration))
+        {
+            _state.Reset();
+            ClearPopup();
+        }
+
         // The low-level keyboard callback must never perform synchronous UIA.
         // Current is an atomically published snapshot; the inserter performs a
         // bounded, strong-identity/text/caret check before any mutation.
         if (!_state.IsActive && refreshFocus && input.Character == ':')
         {
-            _triggerField = _focus.Current;
-            if (!EmojiFocusPolicy.IsUsableTarget(_triggerField))
+            long focusGeneration = Volatile.Read(ref _focusGeneration);
+            var triggerField = _focus.Current;
+            Volatile.Write(ref _triggerField, triggerField);
+            if (focusGeneration != Volatile.Read(ref _focusGeneration))
             {
-                _triggerField = null;
+                Volatile.Write(ref _triggerField, null);
+                return;
+            }
+            _triggerFocusGeneration = focusGeneration;
+            if (!EmojiFocusPolicy.IsUsableTarget(triggerField))
+            {
+                Volatile.Write(ref _triggerField, null);
                 return; // Don't start in fields where we can't insert anyway,
                         // or in a sign-in/verification field we must leave alone.
             }
@@ -88,7 +109,7 @@ public sealed class EmojiPickerController : IDisposable
         else if (_state.IsActive && refreshFocus)
         {
             var liveField = _focus.Current;
-            if (!EmojiFocusPolicy.SameUsableTarget(_triggerField, liveField))
+            if (!EmojiFocusPolicy.SameUsableTarget(Volatile.Read(ref _triggerField), liveField))
             {
                 _state.Reset();
                 ClearPopup();
@@ -119,18 +140,44 @@ public sealed class EmojiPickerController : IDisposable
         }
     }
 
+    private void OnFocusChanged(object? sender, FocusedField? field)
+    {
+        var target = Volatile.Read(ref _triggerField);
+        if (target is null || EmojiFocusPolicy.SameUsableTarget(target, field)) return;
+
+        Interlocked.Increment(ref _focusGeneration);
+        try { _dispatcher.BeginInvoke(() => _popup.Hide()); }
+        catch (InvalidOperationException) { }
+    }
+
     private void RefreshPopup()
     {
         _matches = EmojiMatcher.Search(_state.Query, max: 6);
         _selected = 0;
         // The published current snapshot must still belong to the trigger target.
         // Replacement uses the original trigger caret and refreshes asynchronously.
-        var anchor = _triggerField?.CaretRect ?? new ScreenRect(100, 100, 1, 20);
-        _dispatcher.BeginInvoke(() => _popup.Show(_matches, _state.Query, anchor, _selected));
+        var target = Volatile.Read(ref _triggerField);
+        var matches = _matches;
+        string query = _state.Query;
+        int selected = _selected;
+        var anchor = target?.CaretRect ?? new ScreenRect(100, 100, 1, 20);
+        long generation = _triggerFocusGeneration;
+        _dispatcher.BeginInvoke(() =>
+        {
+            if (generation != Volatile.Read(ref _focusGeneration)
+                || !EmojiFocusPolicy.SameUsableTarget(target, _focus.Current))
+            {
+                _popup.Hide();
+                return;
+            }
+
+            _popup.Show(matches, query, anchor, selected);
+        });
     }
 
     private void ClearPopup()
     {
+        Interlocked.Increment(ref _focusGeneration);
         _matches = new List<EmojiEntry>();
         _selected = 0;
         _triggerField = null;
