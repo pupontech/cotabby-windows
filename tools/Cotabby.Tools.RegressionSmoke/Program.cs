@@ -326,6 +326,7 @@ internal static class Program
                 writingBox.Focus();
                 writingBox.CaretIndex = writingBox.Text.Length;
                 await Task.Delay(150);
+                tracker.SetFakeFieldForTesting(writingTarget);
                 var queryFocus = new CountingFocusTracker(tracker);
                 var queryHook = new RegressionKeyboardHook();
                 var queryInserter = new RecordingTextInserter();
@@ -345,6 +346,7 @@ internal static class Program
                     await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                     Require(!queryPopup.IsVisible,
                         "emoji popup remained visible after focus moved to a search field");
+                    tracker.SetFakeFieldForTesting(null);
                     int readsBeforeLostCharacter = queryFocus.RefreshCount;
                     var lostCharacter = await Task.Run(() => queryHook.Raise('m'));
                     await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
