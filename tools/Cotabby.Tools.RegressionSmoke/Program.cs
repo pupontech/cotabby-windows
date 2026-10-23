@@ -342,7 +342,7 @@ internal static class Program
                         "emoji popup did not open for the original writing field");
                     searchBox.Focus();
                     searchBox.CaretIndex = searchBox.Text.Length;
-                    tracker.SetFakeFieldForTesting(null);
+                    await Task.Run(() => tracker.SetFakeFieldForTesting(null));
                     await Task.Delay(150);
                     await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                     Require(!queryPopup.IsVisible,
