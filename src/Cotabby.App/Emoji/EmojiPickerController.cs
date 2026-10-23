@@ -180,7 +180,7 @@ public sealed class EmojiPickerController : IDisposable
         Interlocked.Increment(ref _focusGeneration);
         _matches = new List<EmojiEntry>();
         _selected = 0;
-        _triggerField = null;
+        Volatile.Write(ref _triggerField, null);
         _dispatcher.BeginInvoke(() => _popup.Hide());
     }
 
