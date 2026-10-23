@@ -337,9 +337,14 @@ internal static class Program
                     await Task.Run(() => queryHook.Raise(':'));
                     await Task.Run(() => queryHook.Raise('s'));
                     await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    Require(queryPopup.IsVisible,
+                        "emoji popup did not open for the original writing field");
                     searchBox.Focus();
                     searchBox.CaretIndex = searchBox.Text.Length;
                     await Task.Delay(150);
+                    await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                    Require(!queryPopup.IsVisible,
+                        "emoji popup remained visible after focus moved to a search field");
                     int readsBeforeLostCharacter = queryFocus.RefreshCount;
                     var lostCharacter = await Task.Run(() => queryHook.Raise('m'));
                     await app.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
